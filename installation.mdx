@@ -1,0 +1,378 @@
+---
+title: "Installation"
+description: "Install Kuzu for Python, Node.js, Java, Rust, C/C++, or WebAssembly. Kuzu v0.11.2.2 is available across all major platforms."
+keywords: ["install", "pip", "npm", "Maven", "Gradle", "cargo", "CMake", "WebAssembly"]
+---
+
+Kuzu v0.11.2.2 is available as a pre-built package for Python, Node.js, Java, and Rust. For C and C++, you can build from source or download prebuilt binaries.
+
+## Install by language
+
+<Tabs>
+  <Tab title="Python">
+    Install the `kuzu` package from [PyPI](https://pypi.org/project/kuzu/) using pip.
+
+    ```bash
+    pip install kuzu
+    ```
+
+    **Requirements:** Python 3.8 or higher. The native Kuzu library is bundled in the wheel — no separate system dependencies are required.
+
+    Verify the installation:
+
+    ```python
+    import kuzu
+    print(kuzu.version)  # e.g. "0.11.2.2"
+    ```
+
+    To install a specific version:
+
+    ```bash
+    pip install kuzu==0.11.2.2
+    ```
+
+    <Tip>
+      Use a virtual environment to keep your project dependencies isolated.
+
+      ```bash
+      python -m venv .venv
+      source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+      pip install kuzu
+      ```
+    </Tip>
+  </Tab>
+
+  <Tab title="Node.js">
+    Install the `kuzu` package from [npm](https://www.npmjs.com/package/kuzu).
+
+    ```bash
+    npm install kuzu
+    ```
+
+    **Requirements:** Node.js 18 or higher.
+
+    Verify the installation:
+
+    ```javascript
+    const kuzu = require("kuzu");
+    console.log(kuzu.VERSION);
+    ```
+
+    To install a specific version:
+
+    ```bash
+    npm install kuzu@0.11.2.2
+    ```
+
+    The package supports both CommonJS (`require`) and ES module (`import`) styles:
+
+    ```javascript
+    // CommonJS
+    const { Database, Connection } = require("kuzu");
+
+    // ES module
+    import { Database, Connection } from "kuzu";
+    ```
+  </Tab>
+
+  <Tab title="Java">
+    The Kuzu Java API is published to Maven Central under the coordinates `com.kuzudb:kuzu`. **Requires Java 11 or higher.**
+
+    <Tabs>
+      <Tab title="Maven">
+        Add the dependency to your `pom.xml`:
+
+        ```xml
+        <dependency>
+          <groupId>com.kuzudb</groupId>
+          <artifactId>kuzu</artifactId>
+          <version>0.11.2.2</version>
+        </dependency>
+        ```
+      </Tab>
+      <Tab title="Gradle (Groovy)">
+        Add the dependency to your `build.gradle`:
+
+        ```groovy
+        dependencies {
+            implementation 'com.kuzudb:kuzu:0.11.2.2'
+        }
+        ```
+      </Tab>
+      <Tab title="Gradle (Kotlin)">
+        Add the dependency to your `build.gradle.kts`:
+
+        ```kotlin
+        dependencies {
+            implementation("com.kuzudb:kuzu:0.11.2.2")
+        }
+        ```
+      </Tab>
+    </Tabs>
+
+    The JAR bundles the native JNI library for your platform, so no additional setup is required after adding the dependency.
+  </Tab>
+
+  <Tab title="Rust">
+    Add the `kuzu` crate to your project from [crates.io](https://crates.io/crates/kuzu).
+
+    ```bash
+    cargo add kuzu
+    ```
+
+    Or add it manually to your `Cargo.toml`:
+
+    ```toml
+    [dependencies]
+    kuzu = "0.11.2.2"
+    ```
+
+    By default, the Kuzu C++ library is compiled from source and statically linked into your binary. If you prefer to link against a prebuilt version of the library, set the following environment variables before building:
+
+    ```bash
+    export KUZU_LIBRARY_DIR=/path/to/kuzu/lib
+    export KUZU_INCLUDE_DIR=/path/to/kuzu/include
+    export KUZU_SHARED=1  # link dynamically instead of statically
+    ```
+
+    On macOS with Homebrew:
+
+    ```bash
+    brew install kuzu
+    export KUZU_LIBRARY_DIR=/opt/homebrew/lib
+    export KUZU_INCLUDE_DIR=/opt/homebrew/include
+    export KUZU_SHARED=1
+    ```
+
+    <Warning>
+      Binaries built with the Kuzu Rust crate do not load extensions by default (except on Windows/MSVC). To use extensions in binary crates or tests, add the following to your `build.rs`:
+
+      ```rust
+      println!("cargo:rustc-link-arg=-rdynamic");
+      ```
+    </Warning>
+
+    A minimal example from the Kuzu repository:
+
+    ```rust
+    use kuzu::{Database, SystemConfig, Connection};
+
+    fn main() -> Result<(), kuzu::Error> {
+        let db = Database::new("./my_graph", SystemConfig::default())?;
+        let conn = Connection::new(&db)?;
+
+        conn.query("CREATE NODE TABLE Person(name STRING, age INT64, PRIMARY KEY(name));")?;
+        conn.query("CREATE (:Person {name: 'Alice', age: 25});")?;
+        conn.query("CREATE (:Person {name: 'Bob', age: 30});")?;
+
+        let result = conn.query("MATCH (a:Person) RETURN a.name AS NAME, a.age AS AGE;")?;
+        println!("{}", result);
+        Ok(())
+    }
+    ```
+  </Tab>
+
+  <Tab title="C/C++">
+    Kuzu provides a C API (`kuzu.h`) and a C++ API (`kuzu.hpp`). You can build from source or download prebuilt binaries.
+
+    ### Build from source
+
+    Prerequisites: CMake 3.15+, a C++20-capable compiler (GCC 11+, Clang 13+, MSVC 2022+).
+
+    ```bash
+    git clone https://github.com/kuzudb/kuzu.git
+    cd kuzu
+    cmake -B build/release -DCMAKE_BUILD_TYPE=Release
+    cmake --build build/release --parallel
+    ```
+
+    After building, the shared library and headers are in `build/release/src/`.
+
+    ### C++ example
+
+    Link against `kuzu_shared` and include `kuzu.hpp`:
+
+    ```cpp
+    #include <iostream>
+    #include "kuzu.hpp"
+    using namespace kuzu::main;
+
+    int main() {
+        auto database = std::make_unique<Database>("./my_graph");
+        auto connection = std::make_unique<Connection>(database.get());
+
+        connection->query("CREATE NODE TABLE Person(name STRING, age INT64, PRIMARY KEY(name));");
+        connection->query("CREATE (:Person {name: 'Alice', age: 25});");
+        connection->query("CREATE (:Person {name: 'Bob', age: 30});");
+
+        auto result = connection->query(
+            "MATCH (a:Person) RETURN a.name AS NAME, a.age AS AGE;"
+        );
+        std::cout << result->toString();
+    }
+    ```
+
+    ### C example
+
+    Link against `kuzu_shared` and include `kuzu.h`:
+
+    ```c
+    #include <stdio.h>
+    #include "kuzu.h"
+
+    int main() {
+        kuzu_database db;
+        kuzu_connection conn;
+        kuzu_database_init("./my_graph", kuzu_default_system_config(), &db);
+        kuzu_connection_init(&db, &conn);
+
+        kuzu_query_result result;
+        kuzu_connection_query(
+            &conn,
+            "CREATE NODE TABLE Person(name STRING, age INT64, PRIMARY KEY(name));",
+            &result
+        );
+        kuzu_query_result_destroy(&result);
+
+        kuzu_connection_query(
+            &conn,
+            "MATCH (a:Person) RETURN a.name AS NAME, a.age AS AGE;",
+            &result
+        );
+
+        char* result_string = kuzu_query_result_to_string(&result);
+        printf("%s", result_string);
+        kuzu_destroy_string(result_string);
+
+        kuzu_query_result_destroy(&result);
+        kuzu_connection_destroy(&conn);
+        kuzu_database_destroy(&db);
+        return 0;
+    }
+    ```
+
+    ### CMake integration
+
+    ```cmake
+    cmake_minimum_required(VERSION 3.15)
+    project(my_app)
+
+    add_executable(my_app main.cpp)
+    target_link_libraries(my_app kuzu_shared)
+    target_include_directories(my_app PRIVATE /path/to/kuzu/src/include)
+    ```
+  </Tab>
+
+  <Tab title="WebAssembly">
+    Kuzu compiles to WebAssembly for use in browsers and other Wasm environments.
+
+    ```bash
+    npm install @kuzu/kuzu-wasm
+    ```
+
+    The `@kuzu/kuzu-wasm` package provides the same `Database` and `Connection` API as the Node.js package, running entirely client-side without a server.
+
+    ```javascript
+    import kuzu from "@kuzu/kuzu-wasm";
+
+    const db = new kuzu.Database();
+    const conn = new kuzu.Connection(db);
+
+    conn.query("CREATE NODE TABLE Person(name STRING, age INT64, PRIMARY KEY(name));");
+    conn.query("CREATE (:Person {name: 'Alice', age: 25});");
+
+    const result = conn.query("MATCH (p:Person) RETURN p.name, p.age");
+    console.log(result);
+    ```
+  </Tab>
+</Tabs>
+
+## System requirements
+
+| Language | Minimum version | Notes |
+|----------|----------------|-------|
+| Python | 3.8+ | Native library bundled in the wheel |
+| Node.js | 18+ | Native addon bundled in the npm package |
+| Java | 11+ | JNI library bundled in the JAR |
+| Rust | Stable (1.70+) | C++ library compiled from source by default |
+| C/C++ | CMake 3.15+, C++20 compiler | Build from source or use prebuilt binaries |
+
+Kuzu runs on Linux (x86\_64, arm64), macOS (x86\_64, Apple Silicon), and Windows (x86\_64).
+
+## Persistent vs. in-memory databases
+
+All language APIs support both persistent and in-memory databases.
+
+**Persistent:** Pass a file system path. Kuzu creates the directory if it does not exist and writes all data to disk.
+
+```python
+db = kuzu.Database("./my_graph")        # Python
+```
+
+```javascript
+const db = new Database("./my_graph");  // Node.js
+```
+
+**In-memory:** Pass `":memory:"` or `None` (Python) / an empty string or `":memory:"` (Node.js). All data is held in RAM and discarded when the process exits.
+
+```python
+db = kuzu.Database(":memory:")          # Python
+db = kuzu.Database()                    # Python (None default)
+```
+
+```javascript
+const db = new Database(":memory:");    // Node.js
+const db = new Database();              // Node.js (defaults to :memory:)
+```
+
+<Note>
+  Only one writable `Database` instance can open a given path at a time. To open the same database from multiple processes simultaneously, open the additional instances in read-only mode.
+
+  ```python
+  db = kuzu.Database("./my_graph", read_only=True)
+  ```
+</Note>
+
+## Extensions
+
+As of v0.11.3, Kuzu bundles four extensions that are pre-installed and load automatically — no `INSTALL` command required:
+
+| Extension | Capability |
+|-----------|-----------|
+| `algo` | Graph algorithms (PageRank, community detection, connected components) |
+| `fts` | Full-text search index |
+| `json` | Read and write JSON data |
+| `vector` | Vector similarity index for embeddings |
+
+<Warning>
+  If you are using Kuzu v0.11.2.2 or earlier, extensions are not bundled and must be installed from a local extension server. Pull the extension server Docker image and point Kuzu at it:
+
+  ```bash
+  docker pull ghcr.io/kuzudb/extension-repo:latest
+  docker run -d -p 8080:80 ghcr.io/kuzudb/extension-repo:latest
+  ```
+
+  Then install the extension in your query:
+
+  ```cypher
+  INSTALL fts FROM 'http://localhost:8080/';
+  LOAD EXTENSION fts;
+  ```
+</Warning>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Build and query your first graph in minutes
+  </Card>
+  <Card title="Python API" icon="code" href="/client-apis/python">
+    Full Python client library reference
+  </Card>
+  <Card title="Node.js API" icon="js" href="/client-apis/nodejs">
+    Full Node.js client library reference
+  </Card>
+  <Card title="Extensions" icon="puzzle-piece" href="/extensions/overview">
+    Full-text search, vector index, and graph algorithms
+  </Card>
+</CardGroup>

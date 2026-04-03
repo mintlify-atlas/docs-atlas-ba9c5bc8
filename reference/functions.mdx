@@ -1,0 +1,970 @@
+---
+title: "Built-in functions"
+description: "Complete reference for Kuzu's built-in scalar and aggregate functions: aggregation, string, math, list, date/time, type conversion, node/rel, and null handling."
+---
+
+Functions are called inside Cypher expressions. Unless noted, all scalar functions return `null` when any argument is `null`.
+
+---
+
+## Aggregation
+
+Aggregation functions collapse multiple rows into a single value. They can only appear in `RETURN` or `WITH` clauses.
+
+<AccordionGroup>
+  <Accordion title="COUNT(*)">
+    **Signature:** `COUNT(*) → INT64`
+
+    Counts all rows, including those with null values.
+
+    ```cypher
+    MATCH (u:User)
+    RETURN COUNT(*)
+    -- Returns: 4
+    ```
+  </Accordion>
+
+  <Accordion title="COUNT(expr)">
+    **Signature:** `COUNT(expr) → INT64`
+
+    Counts rows where `expr` is not null.
+
+    ```cypher
+    MATCH (u:User)
+    RETURN COUNT(u.age)
+    ```
+  </Accordion>
+
+  <Accordion title="SUM(expr)">
+    **Signature:** `SUM(expr) → same type as input`
+
+    Returns the sum of all non-null values.
+
+    ```cypher
+    MATCH (u:User)
+    RETURN SUM(u.age)
+    ```
+  </Accordion>
+
+  <Accordion title="AVG(expr)">
+    **Signature:** `AVG(expr) → DOUBLE`
+
+    Returns the arithmetic mean of all non-null values.
+
+    ```cypher
+    MATCH (u:User)
+    RETURN AVG(u.age)
+    ```
+  </Accordion>
+
+  <Accordion title="MIN(expr) / MAX(expr)">
+    **Signature:** `MIN(expr) → same type` | `MAX(expr) → same type`
+
+    Returns the minimum or maximum non-null value. Works on numeric, string, date, timestamp, and interval types.
+
+    ```cypher
+    MATCH (u:User)
+    RETURN MIN(u.age), MAX(u.age)
+    ```
+  </Accordion>
+
+  <Accordion title="collect(expr)">
+    **Signature:** `collect(expr) → LIST`
+
+    Aggregates all non-null values into a list.
+
+    ```cypher
+    MATCH (u:User)
+    RETURN collect(u.name)
+    -- Returns: ['Adam', 'Karissa', 'Zhang', 'Noura']
+
+    -- With DISTINCT
+    MATCH (u:User)-[:Follows]->(v:User)
+    RETURN u.name, collect(DISTINCT v.name) AS followees
+    ```
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## String functions
+
+<AccordionGroup>
+  <Accordion title="concat(str, ...)">
+    **Signature:** `concat(STRING, ...) → STRING`
+
+    Concatenates two or more strings. Aliases: `||` operator.
+
+    ```cypher
+    RETURN concat('hello', ' ', 'world')
+    -- Returns: 'hello world'
+    ```
+  </Accordion>
+
+  <Accordion title="concat_ws(sep, str, ...)">
+    **Signature:** `concat_ws(STRING sep, STRING, ...) → STRING`
+
+    Concatenates strings with a separator, skipping null values.
+
+    ```cypher
+    RETURN concat_ws(', ', 'Alice', null, 'Bob')
+    -- Returns: 'Alice, Bob'
+    ```
+  </Accordion>
+
+  <Accordion title="contains(str, substr)">
+    **Signature:** `contains(STRING, STRING) → BOOLEAN`
+
+    Returns `true` if `str` contains `substr`. Equivalent to `str CONTAINS substr`.
+
+    ```cypher
+    MATCH (u:User)
+    WHERE contains(u.name, 'iss')
+    RETURN u.name
+    ```
+  </Accordion>
+
+  <Accordion title="starts_with(str, prefix) / ends_with(str, suffix)">
+    **Signature:** `starts_with(STRING, STRING) → BOOLEAN` | `ends_with(STRING, STRING) → BOOLEAN`
+
+    Tests prefix or suffix membership. Equivalent to `STARTS WITH` / `ENDS WITH` operators.
+
+    ```cypher
+    MATCH (u:User)
+    WHERE starts_with(u.name, 'A')
+    RETURN u.name
+
+    MATCH (u:User)
+    WHERE ends_with(u.name, 'a')
+    RETURN u.name
+    ```
+
+    Aliases: `prefix()`, `suffix()`
+  </Accordion>
+
+  <Accordion title="lower(str) / upper(str)">
+    **Signature:** `lower(STRING) → STRING` | `upper(STRING) → STRING`
+
+    Converts a string to lower-case or upper-case. Unicode-aware.
+
+    ```cypher
+    RETURN lower('Hello World')   -- 'hello world'
+    RETURN upper('Hello World')   -- 'HELLO WORLD'
+    ```
+
+    Aliases: `toLower()`, `lcase()` | `toUpper()`, `ucase()`
+  </Accordion>
+
+  <Accordion title="trim(str) / ltrim(str) / rtrim(str)">
+    **Signature:** `trim(STRING) → STRING` | `ltrim(STRING) → STRING` | `rtrim(STRING) → STRING`
+
+    Removes leading and/or trailing whitespace.
+
+    ```cypher
+    RETURN trim('  hello  ')    -- 'hello'
+    RETURN ltrim('  hello  ')   -- 'hello  '
+    RETURN rtrim('  hello  ')   -- '  hello'
+    ```
+  </Accordion>
+
+  <Accordion title="left(str, n) / right(str, n)">
+    **Signature:** `left(STRING, INT64) → STRING` | `right(STRING, INT64) → STRING`
+
+    Returns the first or last `n` characters of a string.
+
+    ```cypher
+    RETURN left('hello', 3)    -- 'hel'
+    RETURN right('hello', 3)   -- 'llo'
+    ```
+  </Accordion>
+
+  <Accordion title="substring(str, start [, length]) / substr(str, start [, length])">
+    **Signature:** `substring(STRING, INT64 [, INT64]) → STRING`
+
+    Extracts a substring. `start` is 1-indexed.
+
+    ```cypher
+    RETURN substring('hello world', 7)      -- 'world'
+    RETURN substring('hello world', 1, 5)   -- 'hello'
+    ```
+  </Accordion>
+
+  <Accordion title="size(str)">
+    **Signature:** `size(STRING) → INT64`
+
+    Returns the number of characters (Unicode code points) in the string.
+
+    ```cypher
+    RETURN size('hello')   -- 5
+    ```
+  </Accordion>
+
+  <Accordion title="reverse(str)">
+    **Signature:** `reverse(STRING) → STRING`
+
+    Reverses a string. Unicode-aware (grapheme clusters preserved).
+
+    ```cypher
+    RETURN reverse('hello')   -- 'olleh'
+    ```
+  </Accordion>
+
+  <Accordion title="repeat(str, n)">
+    **Signature:** `repeat(STRING, INT64) → STRING`
+
+    Repeats a string `n` times.
+
+    ```cypher
+    RETURN repeat('ab', 3)   -- 'ababab'
+    ```
+  </Accordion>
+
+  <Accordion title="replace(str, search, replacement)">
+    **Signature:** `replace(STRING, STRING, STRING) → STRING` — Use `regexp_replace()` for pattern-based replacement.
+
+    ```cypher
+    RETURN regexp_replace('hello world', 'o', '0')      -- 'hell0 world' (first match)
+    RETURN regexp_replace('hello world', 'o', '0', 'g') -- 'hell0 w0rld' (global)
+    ```
+  </Accordion>
+
+  <Accordion title="split(str, delimiter)">
+    **Signature:** `string_split(STRING, STRING) → STRING[]`
+
+    Splits a string by a delimiter and returns a list.
+
+    ```cypher
+    RETURN string_split('a,b,c', ',')   -- ['a', 'b', 'c']
+    ```
+
+    Aliases: `str_split()`, `string_to_array()`
+  </Accordion>
+
+  <Accordion title="split_part(str, delimiter, n)">
+    **Signature:** `split_part(STRING, STRING, INT64) → STRING`
+
+    Returns the nth part after splitting by delimiter (1-indexed).
+
+    ```cypher
+    RETURN split_part('a,b,c', ',', 2)   -- 'b'
+    ```
+  </Accordion>
+
+  <Accordion title="lpad(str, length, pad) / rpad(str, length, pad)">
+    **Signature:** `lpad(STRING, INT64, STRING) → STRING` | `rpad(STRING, INT64, STRING) → STRING`
+
+    Pads a string to the given length with the pad character on the left or right.
+
+    ```cypher
+    RETURN lpad('42', 6, '0')    -- '000042'
+    RETURN rpad('hello', 8, '.')  -- 'hello...'
+    ```
+  </Accordion>
+
+  <Accordion title="initcap(str)">
+    **Signature:** `initcap(STRING) → STRING`
+
+    Capitalizes the first letter of each word.
+
+    ```cypher
+    RETURN initcap('hello world')   -- 'Hello World'
+    ```
+  </Accordion>
+
+  <Accordion title="levenshtein(a, b)">
+    **Signature:** `levenshtein(STRING, STRING) → INT64`
+
+    Returns the Levenshtein edit distance between two strings.
+
+    ```cypher
+    RETURN levenshtein('kitten', 'sitting')   -- 3
+    ```
+  </Accordion>
+
+  <Accordion title="regexp_full_match / regexp_matches / regexp_extract / regexp_extract_all / regexp_split_to_array">
+    ```cypher
+    RETURN regexp_full_match('hello', 'hel.*')              -- true
+    RETURN regexp_matches('hello world', 'wor')             -- true
+    RETURN regexp_extract('2024-01-15', '(\d{4})-(\d{2})-(\d{2})', 1) -- '2024'
+    RETURN regexp_extract_all('a1b2c3', '[a-z](\d)')        -- ['1', '2', '3']
+    RETURN regexp_split_to_array('a1b2c3', '\d')            -- ['a', 'b', 'c', '']
+    ```
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Math functions
+
+<AccordionGroup>
+  <Accordion title="abs(x)">
+    **Signature:** `abs(numeric) → same type`
+
+    Returns the absolute value.
+
+    ```cypher
+    RETURN abs(-42)    -- 42
+    RETURN abs(-3.14)  -- 3.14
+    ```
+  </Accordion>
+
+  <Accordion title="ceil(x) / floor(x)">
+    **Signature:** `ceil(DOUBLE) → DOUBLE` | `floor(DOUBLE) → DOUBLE`
+
+    Rounds up or down to the nearest integer.
+
+    ```cypher
+    RETURN ceil(4.2)    -- 5.0
+    RETURN floor(4.8)   -- 4.0
+    ```
+
+    Alias: `ceiling()`
+  </Accordion>
+
+  <Accordion title="round(x [, precision])">
+    **Signature:** `round(DOUBLE [, INT64]) → DOUBLE`
+
+    Rounds to the given number of decimal places (default 0).
+
+    ```cypher
+    RETURN round(3.14159, 2)   -- 3.14
+    RETURN round(3.5)          -- 4.0
+    ```
+  </Accordion>
+
+  <Accordion title="sqrt(x) / cbrt(x)">
+    **Signature:** `sqrt(DOUBLE) → DOUBLE` | `cbrt(DOUBLE) → DOUBLE`
+
+    Square root and cube root.
+
+    ```cypher
+    RETURN sqrt(16.0)   -- 4.0
+    RETURN cbrt(27.0)   -- 3.0
+    ```
+  </Accordion>
+
+  <Accordion title="pow(x, y) / ^ operator">
+    **Signature:** `pow(DOUBLE, DOUBLE) → DOUBLE`
+
+    Raises `x` to the power of `y`.
+
+    ```cypher
+    RETURN pow(2.0, 10.0)   -- 1024.0
+    RETURN 2 ^ 10            -- 1024
+    ```
+  </Accordion>
+
+  <Accordion title="log(x) / log2(x) / ln(x)">
+    **Signature:** `log(DOUBLE) → DOUBLE` | `log2(DOUBLE) → DOUBLE` | `ln(DOUBLE) → DOUBLE`
+
+    Logarithms in base 10, base 2, and natural (base e).
+
+    ```cypher
+    RETURN log(100.0)   -- 2.0
+    RETURN log2(8.0)    -- 3.0
+    RETURN ln(2.718)    -- ~1.0
+    ```
+
+    Alias: `log10()` for `log()`
+  </Accordion>
+
+  <Accordion title="exp(x)">
+    **Signature:** `exp(DOUBLE) → DOUBLE`
+
+    Returns e raised to the power of x.
+
+    ```cypher
+    RETURN exp(1.0)   -- 2.718...
+    ```
+  </Accordion>
+
+  <Accordion title="sign(x)">
+    **Signature:** `sign(numeric) → INT64`
+
+    Returns -1, 0, or 1 for negative, zero, or positive values.
+
+    ```cypher
+    RETURN sign(-5), sign(0), sign(3)   -- -1, 0, 1
+    ```
+  </Accordion>
+
+  <Accordion title="sin / cos / tan / asin / acos / atan / atan2 / cot">
+    Trigonometric functions operating on radians.
+
+    ```cypher
+    RETURN sin(pi() / 2)    -- 1.0
+    RETURN cos(0.0)          -- 1.0
+    RETURN atan2(1.0, 1.0)   -- pi/4
+    ```
+  </Accordion>
+
+  <Accordion title="degrees(x) / radians(x)">
+    Convert between degrees and radians.
+
+    ```cypher
+    RETURN degrees(pi())   -- 180.0
+    RETURN radians(180.0)  -- pi
+    ```
+  </Accordion>
+
+  <Accordion title="pi()">
+    **Signature:** `pi() → DOUBLE`
+
+    Returns π (3.141592653589793...).
+
+    ```cypher
+    RETURN pi()   -- 3.141592653589793
+    ```
+  </Accordion>
+
+  <Accordion title="random()">
+    **Signature:** `random() → DOUBLE`
+
+    Returns a random `DOUBLE` in [0, 1). Non-deterministic.
+
+    ```cypher
+    RETURN random()
+    ```
+  </Accordion>
+
+  <Accordion title="factorial(n)">
+    **Signature:** `factorial(INT64) → INT64`
+
+    Returns n!. Also available as postfix `!` operator.
+
+    ```cypher
+    RETURN factorial(5)   -- 120
+    RETURN 5!             -- 120
+    ```
+  </Accordion>
+
+  <Accordion title="even(x)">
+    **Signature:** `even(DOUBLE) → DOUBLE`
+
+    Rounds to the nearest even integer.
+
+    ```cypher
+    RETURN even(3.5)   -- 4.0
+    RETURN even(2.5)   -- 2.0
+    ```
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## List functions
+
+<AccordionGroup>
+  <Accordion title="size(list)">
+    **Signature:** `size(LIST) → INT64`
+
+    Returns the number of elements in the list.
+
+    ```cypher
+    RETURN size([1, 2, 3])   -- 3
+    ```
+
+    Alias: `cardinality()`
+  </Accordion>
+
+  <Accordion title="range(start, end [, step])">
+    **Signature:** `range(INT64, INT64 [, INT64]) → INT64[]`
+
+    Generates a list of integers from `start` to `end` (inclusive) with optional step.
+
+    ```cypher
+    RETURN range(1, 5)        -- [1, 2, 3, 4, 5]
+    RETURN range(0, 10, 2)    -- [0, 2, 4, 6, 8, 10]
+    ```
+  </Accordion>
+
+  <Accordion title="list_extract(list, index) / list[i]">
+    **Signature:** `list_extract(LIST, INT64) → element type`
+
+    Returns the element at position `i` (1-indexed). Also accessible via `list[i]`.
+
+    ```cypher
+    RETURN [10, 20, 30][2]              -- 20
+    RETURN list_extract([10, 20], 1)    -- 10
+    ```
+
+    Alias: `list_element()`
+  </Accordion>
+
+  <Accordion title="list_slice(list, start, end)">
+    **Signature:** `list_slice(LIST, INT64, INT64) → LIST`
+
+    Returns a sublist. Also available as `list[start..end]`.
+
+    ```cypher
+    RETURN [1, 2, 3, 4, 5][2..4]              -- [2, 3, 4]
+    RETURN list_slice([1, 2, 3, 4, 5], 2, 4)  -- [2, 3, 4]
+    ```
+  </Accordion>
+
+  <Accordion title="list_concat(list1, list2) / + operator">
+    **Signature:** `list_concat(LIST, LIST) → LIST`
+
+    Concatenates two lists.
+
+    ```cypher
+    RETURN [1, 2] + [3, 4]                    -- [1, 2, 3, 4]
+    RETURN list_concat([1, 2], [3, 4])         -- [1, 2, 3, 4]
+    ```
+
+    Aliases: `list_cat()`
+  </Accordion>
+
+  <Accordion title="list_append(list, element) / list_prepend(list, element)">
+    **Signature:** `list_append(LIST, element) → LIST` | `list_prepend(LIST, element) → LIST`
+
+    Appends or prepends a single element.
+
+    ```cypher
+    RETURN list_append([1, 2], 3)     -- [1, 2, 3]
+    RETURN list_prepend([2, 3], 1)    -- [1, 2, 3]
+    ```
+  </Accordion>
+
+  <Accordion title="list_contains(list, element) / element IN list">
+    **Signature:** `list_contains(LIST, element) → BOOLEAN`
+
+    Returns `true` if the element is in the list.
+
+    ```cypher
+    RETURN list_contains([1, 2, 3], 2)   -- true
+    RETURN 2 IN [1, 2, 3]                -- true
+    ```
+
+    Alias: `list_has()`
+  </Accordion>
+
+  <Accordion title="list_has_all(list, sublist)">
+    **Signature:** `list_has_all(LIST, LIST) → BOOLEAN`
+
+    Returns `true` if all elements in the second list are present in the first.
+
+    ```cypher
+    RETURN list_has_all([1, 2, 3, 4], [2, 4])   -- true
+    ```
+  </Accordion>
+
+  <Accordion title="list_position(list, element)">
+    **Signature:** `list_position(LIST, element) → INT64`
+
+    Returns the 1-indexed position of the first matching element, or 0 if not found.
+
+    ```cypher
+    RETURN list_position([10, 20, 30], 20)   -- 2
+    ```
+
+    Alias: `list_indexof()`
+  </Accordion>
+
+  <Accordion title="list_sort(list [, order]) / list_reverse_sort(list)">
+    **Signature:** `list_sort(LIST [, STRING]) → LIST`
+
+    Sorts a list. Optional second argument: `'ASC'` (default) or `'DESC'`.
+
+    ```cypher
+    RETURN list_sort([3, 1, 2])              -- [1, 2, 3]
+    RETURN list_sort([3, 1, 2], 'DESC')      -- [3, 2, 1]
+    RETURN list_reverse_sort([3, 1, 2])      -- [3, 2, 1]
+    ```
+  </Accordion>
+
+  <Accordion title="list_reverse(list)">
+    **Signature:** `list_reverse(LIST) → LIST`
+
+    Reverses the order of elements.
+
+    ```cypher
+    RETURN list_reverse([1, 2, 3])   -- [3, 2, 1]
+    ```
+  </Accordion>
+
+  <Accordion title="list_distinct(list)">
+    **Signature:** `list_distinct(LIST) → LIST`
+
+    Returns unique elements. Does not guarantee order.
+
+    ```cypher
+    RETURN list_distinct([1, 2, 2, 3, 1])   -- [1, 2, 3]
+    ```
+  </Accordion>
+
+  <Accordion title="list_unique(list)">
+    **Signature:** `list_unique(LIST) → INT64`
+
+    Returns the count of unique values in the list.
+
+    ```cypher
+    RETURN list_unique([1, 2, 2, 3])   -- 3
+    ```
+  </Accordion>
+
+  <Accordion title="list_sum(list) / list_product(list)">
+    **Signature:** `list_sum(LIST) → numeric` | `list_product(LIST) → numeric`
+
+    Returns the sum or product of numeric list elements.
+
+    ```cypher
+    RETURN list_sum([1, 2, 3])      -- 6
+    RETURN list_product([2, 3, 4])  -- 24
+    ```
+  </Accordion>
+
+  <Accordion title="list_to_string(list, sep)">
+    **Signature:** `list_to_string(LIST, STRING) → STRING`
+
+    Joins list elements with a separator string.
+
+    ```cypher
+    RETURN list_to_string(['a', 'b', 'c'], ', ')   -- 'a, b, c'
+    ```
+  </Accordion>
+
+  <Accordion title="list_transform(list, x -> expr)">
+    **Signature:** `list_transform(LIST, lambda) → LIST`
+
+    Applies a lambda to each element.
+
+    ```cypher
+    RETURN list_transform([1, 2, 3], x -> x * 2)   -- [2, 4, 6]
+    ```
+  </Accordion>
+
+  <Accordion title="list_filter(list, x -> predicate)">
+    **Signature:** `list_filter(LIST, lambda) → LIST`
+
+    Keeps elements for which the predicate returns `true`.
+
+    ```cypher
+    RETURN list_filter([1, 2, 3, 4], x -> x % 2 = 0)   -- [2, 4]
+    ```
+  </Accordion>
+
+  <Accordion title="list_reduce(list, (acc, x) -> expr)">
+    **Signature:** `list_reduce(LIST, lambda) → element type`
+
+    Reduces a list to a single value using a binary lambda.
+
+    ```cypher
+    RETURN list_reduce([1, 2, 3, 4], (acc, x) -> acc + x)   -- 10
+    ```
+  </Accordion>
+
+  <Accordion title="list_any_value(list)">
+    **Signature:** `list_any_value(LIST) → element type`
+
+    Returns any non-null element from the list.
+
+    ```cypher
+    RETURN list_any_value([null, 2, 3])   -- 2 or 3
+    ```
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Date and time functions
+
+<AccordionGroup>
+  <Accordion title="date(str) / current_date()">
+    **Signature:** `date(STRING) → DATE` | `current_date() → DATE`
+
+    Parses a date string or returns today's date.
+
+    ```cypher
+    RETURN date('2024-01-15')
+    RETURN current_date()
+    ```
+
+    Alias: `to_date()`
+  </Accordion>
+
+  <Accordion title="timestamp(str) / current_timestamp()">
+    **Signature:** `timestamp(STRING) → TIMESTAMP` | `current_timestamp() → TIMESTAMP_TZ`
+
+    Parses a timestamp string or returns the current timestamp.
+
+    ```cypher
+    RETURN timestamp('2024-01-15 12:30:00')
+    RETURN current_timestamp()
+    ```
+  </Accordion>
+
+  <Accordion title="interval(str) / duration(str)">
+    **Signature:** `interval(STRING) → INTERVAL` | `duration(STRING) → INTERVAL`
+
+    Parses an interval string.
+
+    ```cypher
+    RETURN interval('1 year 3 months 5 days')
+    RETURN interval('48:30:00')   -- 48 hours 30 minutes
+    ```
+
+    Alias: `duration()`, `to_interval()`
+  </Accordion>
+
+  <Accordion title="date_part(part, date)">
+    **Signature:** `date_part(STRING, DATE|TIMESTAMP|INTERVAL) → INT64`
+
+    Extracts a named component. Supported part names: `'year'`, `'month'`, `'day'`, `'hour'`, `'minute'`, `'second'`, `'microsecond'`, `'epoch'`, `'quarter'`, `'week'`, `'dayofweek'`, `'dayofyear'`, `'decade'`, `'century'`, `'millennium'`.
+
+    ```cypher
+    RETURN date_part('year', date('2024-06-15'))    -- 2024
+    RETURN date_part('month', date('2024-06-15'))   -- 6
+    RETURN date_part('hour', timestamp('2024-06-15 14:30:00'))  -- 14
+    ```
+  </Accordion>
+
+  <Accordion title="date_trunc(part, date)">
+    **Signature:** `date_trunc(STRING, DATE|TIMESTAMP) → same type`
+
+    Truncates a date or timestamp to the given precision.
+
+    ```cypher
+    RETURN date_trunc('month', date('2024-06-15'))         -- 2024-06-01
+    RETURN date_trunc('year', timestamp('2024-06-15 14:30'))  -- 2024-01-01 00:00:00
+    ```
+  </Accordion>
+
+  <Accordion title="dayname(date) / monthname(date)">
+    **Signature:** `dayname(DATE|TIMESTAMP) → STRING` | `monthname(DATE|TIMESTAMP) → STRING`
+
+    Returns the name of the weekday or month.
+
+    ```cypher
+    RETURN dayname(date('2024-01-15'))    -- 'Monday'
+    RETURN monthname(date('2024-01-15'))  -- 'January'
+    ```
+  </Accordion>
+
+  <Accordion title="last_day(date)">
+    **Signature:** `last_day(DATE|TIMESTAMP) → DATE`
+
+    Returns the last day of the month.
+
+    ```cypher
+    RETURN last_day(date('2024-02-01'))   -- 2024-02-29
+    ```
+  </Accordion>
+
+  <Accordion title="make_date(year, month, day)">
+    **Signature:** `make_date(INT64, INT64, INT64) → DATE`
+
+    Constructs a date from integer components.
+
+    ```cypher
+    RETURN make_date(2024, 6, 15)   -- 2024-06-15
+    ```
+  </Accordion>
+
+  <Accordion title="greatest(a, b) / least(a, b)">
+    **Signature:** `greatest(DATE|TIMESTAMP, DATE|TIMESTAMP) → same type`
+
+    Returns the larger or smaller of two date/timestamp values.
+
+    ```cypher
+    RETURN greatest(date('2024-01-01'), date('2023-12-31'))   -- 2024-01-01
+    RETURN least(date('2024-01-01'), date('2023-12-31'))      -- 2023-12-31
+    ```
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Type conversion functions
+
+<AccordionGroup>
+  <Accordion title="CAST(expr AS type)">
+    **Signature:** `CAST(expr AS DataType) → DataType`
+
+    Explicitly casts a value to a different type.
+
+    ```cypher
+    RETURN CAST('42' AS INT64)
+    RETURN CAST(3.14 AS INT64)           -- 3 (truncated)
+    RETURN CAST('2024-01-01' AS DATE)
+    RETURN CAST([1, 2, 3] AS INT32[])
+    ```
+  </Accordion>
+
+  <Accordion title="toString(expr) / string(expr)">
+    **Signature:** `toString(any) → STRING`
+
+    Converts a value of any type to its string representation.
+
+    ```cypher
+    RETURN toString(42)        -- '42'
+    RETURN string(true)        -- 'True'
+    RETURN toString(3.14)      -- '3.140000'
+    ```
+
+    Aliases: `string()`, `to_string()`
+  </Accordion>
+
+  <Accordion title="toFloat(expr)">
+    **Signature:** `toFloat(numeric|STRING) → DOUBLE`
+
+    Converts to a 64-bit float. Use `CAST(x AS FLOAT)` for 32-bit.
+
+    ```cypher
+    RETURN toFloat('3.14')   -- 3.14
+    ```
+  </Accordion>
+
+  <Accordion title="toInteger(expr)">
+    **Signature:** `toInteger(numeric|STRING) → INT64`
+
+    Converts to a 64-bit integer (truncates floats).
+
+    ```cypher
+    RETURN toInteger('42')    -- 42
+    RETURN toInteger(3.99)    -- 3
+    ```
+  </Accordion>
+
+  <Accordion title="toBoolean(expr)">
+    **Signature:** `toBoolean(BOOLEAN|STRING) → BOOLEAN`
+
+    Converts to a boolean. Accepts `'true'`/`'false'` (case-insensitive).
+
+    ```cypher
+    RETURN toBoolean('True')    -- true
+    RETURN toBoolean('false')   -- false
+    ```
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Node and relationship functions
+
+<AccordionGroup>
+  <Accordion title="id(node|rel)">
+    **Signature:** `id(NODE|REL) → INTERNAL_ID`
+
+    Returns the internal ID of a node or relationship.
+
+    ```cypher
+    MATCH (u:User)
+    RETURN id(u)
+    ```
+  </Accordion>
+
+  <Accordion title="label(node|rel)">
+    **Signature:** `label(NODE|REL) → STRING`
+
+    Returns the label string of a node or relationship type.
+
+    ```cypher
+    MATCH (u:User)
+    RETURN label(u)   -- 'User'
+    ```
+
+    Alias: `labels()`
+  </Accordion>
+
+  <Accordion title="properties(nodeList, propName) / properties(relList, propName)">
+    **Signature:** `properties(LIST<NODE|REL>, STRING) → LIST`
+
+    Extracts a named property from each element in a list of nodes or relationships.
+
+    ```cypher
+    MATCH p = (a:User)-[:Follows*1..2]->(b:User)
+    WHERE a.name = 'Adam'
+    RETURN properties(nodes(p), 'name'), properties(rels(p), 'since')
+    ```
+  </Accordion>
+
+  <Accordion title="start_node(rel) / end_node(rel)">
+    **Signature:** `start_node(REL) → NODE` | `end_node(REL) → NODE`
+
+    Returns the start or end node of a relationship.
+
+    ```cypher
+    MATCH ()-[e:Follows]->()
+    RETURN start_node(e), end_node(e)
+    ```
+  </Accordion>
+
+  <Accordion title="nodes(path) / rels(path) / length(path)">
+    **Signature:** `nodes(PATH) → NODE[]` | `rels(PATH) → REL[]` | `length(PATH) → INT64`
+
+    Decompose a path variable bound with `p = ...`.
+
+    ```cypher
+    MATCH p = (a:User)-[:Follows*1..2]->(b:User)
+    WHERE a.name = 'Adam'
+    RETURN nodes(p), rels(p), length(p)
+    ```
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Null handling
+
+<AccordionGroup>
+  <Accordion title="coalesce(expr, ...)">
+    **Signature:** `coalesce(any, ...) → same type as first non-null arg`
+
+    Returns the first non-null value in the argument list.
+
+    ```cypher
+    MATCH (u:User)
+    RETURN coalesce(u.email, u.name)
+    ```
+  </Accordion>
+
+  <Accordion title="IS NULL / IS NOT NULL">
+    Predicate operators for testing null.
+
+    ```cypher
+    MATCH (u:User)
+    WHERE u.email IS NULL
+    RETURN u.name
+
+    MATCH (u:User)
+    WHERE u.email IS NOT NULL
+    RETURN u.name
+    ```
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Utility functions
+
+<AccordionGroup>
+  <Accordion title="offset(node|rel)">
+    **Signature:** `offset(NODE|REL) → INT64`
+
+    Returns the offset portion of the internal ID (the row index within the node/rel table).
+
+    ```cypher
+    MATCH (u:User)
+    RETURN offset(u)
+    ```
+  </Accordion>
+
+  <Accordion title="UUID()">
+    **Signature:** `UUID() → UUID`
+
+    Generates a new random UUID v4.
+
+    ```cypher
+    RETURN UUID()
+    ```
+  </Accordion>
+
+  <Accordion title="hash(expr)">
+    Returns a hash of the given value.
+
+    ```cypher
+    RETURN hash('hello')
+    ```
+  </Accordion>
+</AccordionGroup>

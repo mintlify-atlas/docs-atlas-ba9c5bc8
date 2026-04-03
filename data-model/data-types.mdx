@@ -1,0 +1,365 @@
+---
+title: 'Data types'
+description: 'Reference for all scalar, temporal, nested, and graph data types supported in Kuzu, including how to declare them in table schemas and their Python equivalents.'
+keywords: ['data types', 'INT64', 'STRING', 'DATE', 'TIMESTAMP', 'LIST', 'STRUCT', 'MAP', 'UNION', 'ARRAY', 'UUID', 'SERIAL']
+---
+
+Kuzu is strongly typed. Every property in a node or relationship table has a declared type that is enforced on insert and on COPY.
+
+Types are declared when creating a table:
+
+```cypher
+CREATE NODE TABLE Person(
+  id     SERIAL,
+  name   STRING,
+  age    INT64,
+  score  DOUBLE,
+  joined DATE,
+  PRIMARY KEY (id)
+)
+```
+
+<AccordionGroup>
+
+<Accordion title="Numeric types">
+
+### Signed integers
+
+| Type | Size | Range |
+|------|------|-------|
+| `INT8` | 8-bit | −128 to 127 |
+| `INT16` | 16-bit | −32 768 to 32 767 |
+| `INT32` | 32-bit | −2 147 483 648 to 2 147 483 647 |
+| `INT64` | 64-bit | −9.2 × 10¹⁸ to 9.2 × 10¹⁸ |
+| `INT128` | 128-bit | ±1.7 × 10³⁸ |
+
+### Unsigned integers
+
+| Type | Size | Range |
+|------|------|-------|
+| `UINT8` | 8-bit | 0 to 255 |
+| `UINT16` | 16-bit | 0 to 65 535 |
+| `UINT32` | 32-bit | 0 to 4 294 967 295 |
+| `UINT64` | 64-bit | 0 to 1.8 × 10¹⁹ |
+
+### Floating point
+
+| Type | Precision |
+|------|-----------|
+| `FLOAT` | 32-bit IEEE 754 single precision |
+| `DOUBLE` | 64-bit IEEE 754 double precision |
+
+Use `DOUBLE` for general-purpose decimal arithmetic and `FLOAT` when storage size matters or when interfacing with systems that use 32-bit floats (for example, embedding vectors).
+
+### Declaring numeric properties
+
+```cypher
+CREATE NODE TABLE Sensor(
+  id        INT64,
+  reading   FLOAT,
+  count     UINT32,
+  hugeVal   INT128,
+  PRIMARY KEY (id)
+)
+```
+
+### Python type mapping
+
+| Kuzu type | Python type |
+|-----------|-------------|
+| `INT8` – `INT64`, `INT128` | `int` |
+| `UINT8` – `UINT64` | `int` |
+| `FLOAT`, `DOUBLE` | `float` |
+
+</Accordion>
+
+<Accordion title="Text types">
+
+### STRING
+
+Variable-length UTF-8 text. There is no length limit enforced at the type level.
+
+```cypher
+CREATE NODE TABLE Article(
+  slug  STRING,
+  title STRING,
+  body  STRING,
+  PRIMARY KEY (slug)
+)
+```
+
+`STRING` is the most common type for primary keys when using a natural identifier.
+
+### BLOB
+
+Binary data stored as a raw byte sequence. BLOB values are written using hex escape sequences (`\xNN`) in Cypher literals.
+
+```cypher
+-- Insert a node with binary content
+CREATE (:File {name: 'icon.png', data: '\x89PNG\x0D\x0A\x1A\x0A'})
+```
+
+In query results, BLOB values are rendered as hex-escaped strings.
+
+### Python type mapping
+
+| Kuzu type | Python type |
+|-----------|-------------|
+| `STRING` | `str` |
+| `BLOB` | `bytes` |
+
+</Accordion>
+
+<Accordion title="Temporal types">
+
+### DATE
+
+A calendar date with no time component, stored as `YYYY-MM-DD`.
+
+```cypher
+CREATE NODE TABLE Event(id INT64, name STRING, date DATE, PRIMARY KEY (id))
+CREATE (:Event {id: 1, name: 'Launch', date: date('2024-03-15')})
+```
+
+### TIMESTAMP variants
+
+Kuzu provides several timestamp types to represent instants at different precisions:
+
+| Type | Description |
+|------|-------------|
+| `TIMESTAMP` | Microsecond precision, no time zone |
+| `TIMESTAMP_TZ` | Microsecond precision, UTC-normalized with time zone |
+| `TIMESTAMP_NS` | Nanosecond precision |
+| `TIMESTAMP_MS` | Millisecond precision |
+| `TIMESTAMP_SEC` | Second precision |
+
+```cypher
+CREATE NODE TABLE Reading(
+  id         INT64,
+  ts         TIMESTAMP,
+  ts_ns      TIMESTAMP_NS,
+  PRIMARY KEY (id)
+)
+```
+
+Timestamp literals use `timestamp('YYYY-MM-DD HH:MM:SS')` in Cypher.
+
+### INTERVAL
+
+A duration of time expressed as years, months, days, hours, minutes, and seconds. Intervals are stored in a normalized internal format.
+
+```cypher
+CREATE NODE TABLE Contract(
+  id       INT64,
+  duration INTERVAL,
+  PRIMARY KEY (id)
+)
+```
+
+Interval literals: `interval('3 years 2 days 13:02:00')`.
+
+### Python type mapping
+
+| Kuzu type | Python type |
+|-----------|-------------|
+| `DATE` | `datetime.date` |
+| `TIMESTAMP` | `datetime.datetime` |
+| `TIMESTAMP_TZ` | `datetime.datetime` (timezone-aware) |
+| `INTERVAL` | `datetime.timedelta` |
+
+</Accordion>
+
+<Accordion title="Boolean and UUID">
+
+### BOOL
+
+Standard boolean: `true` or `false`.
+
+```cypher
+CREATE NODE TABLE Person(
+  id        INT64,
+  isStudent BOOLEAN,
+  isWorker  BOOLEAN,
+  PRIMARY KEY (id)
+)
+```
+
+### UUID
+
+A 128-bit universally unique identifier stored in standard `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx` format.
+
+```cypher
+CREATE NODE TABLE Session(
+  id        UUID,
+  startedAt TIMESTAMP,
+  PRIMARY KEY (id)
+)
+```
+
+UUID values can be generated with `gen_random_uuid()` or provided as string literals.
+
+### Python type mapping
+
+| Kuzu type | Python type |
+|-----------|-------------|
+| `BOOL` | `bool` |
+| `UUID` | `str` |
+
+</Accordion>
+
+<Accordion title="SERIAL (auto-increment)">
+
+`SERIAL` is a special type that automatically assigns a monotonically increasing `INT64` value starting from 0. It can only be used as a primary key.
+
+```cypher
+CREATE NODE TABLE Post(
+  id      SERIAL,
+  title   STRING,
+  content STRING,
+  PRIMARY KEY (id)
+)
+```
+
+When inserting data with `CREATE`, omit the `SERIAL` column — Kuzu fills it in automatically:
+
+```cypher
+CREATE (:Post {title: 'Hello world', content: 'My first post.'})
+```
+
+When bulk loading with `COPY FROM`, the `SERIAL` column is also populated automatically if the source file omits it.
+
+<Note>
+`SERIAL` values are assigned based on insertion order and are not guaranteed to be contiguous if rows are deleted. They are unique within the table for the lifetime of the database.
+</Note>
+
+</Accordion>
+
+<Accordion title="Nested types: LIST, ARRAY, MAP, STRUCT, UNION">
+
+### LIST
+
+An ordered, variable-length sequence of values of the same element type. Written as `ELEMENT_TYPE[]`.
+
+```cypher
+CREATE NODE TABLE Person(
+  id          INT64,
+  workedHours INT64[],
+  usedNames   STRING[],
+  PRIMARY KEY (id)
+)
+```
+
+Nested lists are expressed with multiple `[]`:
+
+```cypher
+courseScoresPerTerm INT64[][]
+```
+
+### ARRAY
+
+A fixed-length sequence of values of the same element type. Written as `ELEMENT_TYPE[N]`. ARRAY is more storage-efficient than LIST when the length is known ahead of time and is commonly used for embedding vectors.
+
+```cypher
+CREATE NODE TABLE Person(
+  id     INT64,
+  grades INT64[4],   -- exactly 4 elements
+  PRIMARY KEY (id)
+)
+```
+
+### MAP
+
+An unordered collection of key-value pairs where all keys share one type and all values share another type.
+
+```cypher
+CREATE NODE TABLE Movie(
+  name     STRING,
+  audience MAP(STRING, INT64),
+  PRIMARY KEY (name)
+)
+```
+
+A Cypher literal for a map value: `{audience1: 52, audience53: 42}`.
+
+### STRUCT
+
+A record of named fields, each with its own type. Fields are accessed with dot notation.
+
+```cypher
+CREATE NODE TABLE Organisation(
+  id    INT64,
+  state STRUCT(revenue INT16, location STRING[], stock STRUCT(price INT64[], volume INT64)),
+  PRIMARY KEY (id)
+)
+```
+
+Query a struct field:
+
+```cypher
+MATCH (o:Organisation)
+RETURN o.state.revenue, o.state.stock.price
+```
+
+### UNION
+
+A tagged union (sum type) that holds exactly one of several named alternatives. Useful when a property can legitimately be one of multiple types.
+
+```cypher
+CREATE NODE TABLE Organisation(
+  id   INT64,
+  info UNION(price FLOAT, movein DATE, note STRING),
+  PRIMARY KEY (id)
+)
+```
+
+### Python type mapping
+
+| Kuzu type | Python type |
+|-----------|-------------|
+| `LIST` / `ARRAY` | `list` |
+| `MAP` | `dict` |
+| `STRUCT` | `dict` |
+| `UNION` | the value of the active alternative |
+
+</Accordion>
+
+<Accordion title="Graph types: NODE, REL, RECURSIVE_REL">
+
+These types appear in query results and in UDF signatures. They are not declared as property types in `CREATE TABLE`.
+
+| Type | Description |
+|------|-------------|
+| `NODE` | A node returned from a `MATCH` — contains `_ID`, `_LABEL`, and all properties |
+| `REL` | A relationship returned from a `MATCH` — contains `_ID`, `_LABEL`, source/destination IDs, and all properties |
+| `RECURSIVE_REL` | A variable-length path bound with `MATCH p = ...` — contains lists of nodes and relationships |
+
+```cypher
+-- u has type NODE
+MATCH (u:User) RETURN u
+
+-- r has type REL
+MATCH ()-[r:Follows]->() RETURN r
+
+-- p has type RECURSIVE_REL
+MATCH p = (a:User)-[:Follows*1..3]->(b:User) RETURN p
+```
+
+In Python these are returned as dictionaries with the system fields included.
+
+</Accordion>
+
+</AccordionGroup>
+
+## Type summary table
+
+| Category | Types |
+|----------|-------|
+| Signed integer | `INT8`, `INT16`, `INT32`, `INT64`, `INT128` |
+| Unsigned integer | `UINT8`, `UINT16`, `UINT32`, `UINT64` |
+| Floating point | `FLOAT`, `DOUBLE` |
+| Text | `STRING`, `BLOB` |
+| Temporal | `DATE`, `TIMESTAMP`, `TIMESTAMP_TZ`, `TIMESTAMP_NS`, `TIMESTAMP_MS`, `TIMESTAMP_SEC`, `INTERVAL` |
+| Boolean | `BOOL` |
+| Identifier | `UUID`, `SERIAL` |
+| Nested | `LIST`, `ARRAY`, `MAP`, `STRUCT`, `UNION` |
+| Graph | `NODE`, `REL`, `RECURSIVE_REL` |

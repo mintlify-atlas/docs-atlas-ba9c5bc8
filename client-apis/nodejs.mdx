@@ -1,0 +1,392 @@
+---
+title: "Node.js API"
+description: "Use Kuzu from Node.js with a promise-based async API and full TypeScript type definitions."
+---
+
+## Installation
+
+```bash
+npm install kuzu
+```
+
+## Quickstart
+
+```javascript
+const kuzu = require("kuzu");
+
+async function main() {
+  const db = new kuzu.Database("./my_graph");
+  const conn = new kuzu.Connection(db);
+
+  await conn.query("CREATE NODE TABLE Person(name STRING, age INT64, PRIMARY KEY(name))");
+  await conn.query("CREATE (:Person {name: 'Alice', age: 25})");
+  await conn.query("CREATE (:Person {name: 'Bob', age: 30})");
+
+  const result = await conn.query("MATCH (p:Person) RETURN p.name, p.age");
+  console.log(await result.getAll());
+
+  await db.close();
+}
+
+main();
+```
+
+---
+
+## Database
+
+`Database` manages all database components. Initialization is lazy — the database file is not opened until the first query runs.
+
+```typescript
+new Database(
+  databasePath?: string,
+  bufferManagerSize?: number,
+  enableCompression?: boolean,
+  readOnly?: boolean,
+  maxDBSize?: number,
+  autoCheckpoint?: boolean,
+  checkpointThreshold?: number,
+  throwOnWalReplayFailure?: boolean,
+  enableChecksums?: boolean,
+)
+```
+
+<ParamField path="databasePath" type="string" default='":memory:"'>
+  Path to the database directory. Omit, pass an empty string, or pass `":memory:"` to create an in-memory database.
+</ParamField>
+
+<ParamField path="bufferManagerSize" type="number" default="0">
+  Maximum buffer pool size in bytes. `0` uses an auto-detected size (roughly 80% of system memory).
+</ParamField>
+
+<ParamField path="enableCompression" type="boolean" default="true">
+  Enable on-disk compression for supported column types.
+</ParamField>
+
+<ParamField path="readOnly" type="boolean" default="false">
+  Open the database in read-only mode. Multiple read-only instances can share the same path.
+</ParamField>
+
+<ParamField path="maxDBSize" type="number" default="0">
+  Maximum database size in bytes. `0` uses the platform default (8 TB on 64-bit systems).
+</ParamField>
+
+<ParamField path="autoCheckpoint" type="boolean" default="true">
+  Automatically checkpoint when the WAL file grows beyond `checkpointThreshold`.
+</ParamField>
+
+<ParamField path="checkpointThreshold" type="number" default="-1">
+  WAL file size threshold in bytes for automatic checkpointing. `-1` uses the library default (16 MB).
+</ParamField>
+
+<ParamField path="throwOnWalReplayFailure" type="boolean" default="true">
+  Throw an error if WAL replay fails on startup. When `false`, Kuzu replays as far as possible and silently ignores errors.
+</ParamField>
+
+<ParamField path="enableChecksums" type="boolean" default="true">
+  Use checksums to detect WAL file corruption.
+</ParamField>
+
+### In-memory databases
+
+```javascript
+const db = new kuzu.Database();          // no argument → in-memory
+const db = new kuzu.Database(":memory:"); // explicit in-memory
+```
+
+### Static methods
+
+```typescript
+Database.getVersion(): string
+Database.getStorageVersion(): number
+```
+
+### Initialization
+
+```typescript
+// Explicit (optional — happens automatically on first query)
+await db.init();
+
+// Synchronous (blocks the event loop — use with caution)
+db.initSync();
+```
+
+### Closing
+
+```typescript
+await db.close();    // async
+db.closeSync();      // sync — throws if async init is still running
+```
+
+---
+
+## Connection
+
+`Connection` is the object used to execute queries against a `Database`. Each connection is thread-safe.
+
+```typescript
+new Connection(database: Database, numThreads?: number)
+```
+
+<ParamField path="database" type="Database">
+  The `Database` instance to connect to.
+</ParamField>
+
+<ParamField path="numThreads" type="number">
+  Optional maximum number of threads for query execution on this connection.
+</ParamField>
+
+### Executing queries
+
+```typescript
+// Direct query — most common usage
+conn.query(statement: string, progressCallback?: ProgressCallback): Promise<QueryResult | QueryResult[]>
+
+// Synchronous query (blocks event loop)
+conn.querySync(statement: string): QueryResult | QueryResult[]
+```
+
+When the query string contains multiple semicolon-separated statements, the return value is `QueryResult[]`.
+
+```javascript
+const result = await conn.query("MATCH (p:Person) RETURN p.name, p.age");
+const rows = await result.getAll();
+console.log(rows);
+// [{ 'p.name': 'Alice', 'p.age': 25n }, { 'p.name': 'Bob', 'p.age': 30n }]
+```
+
+### Prepared statements
+
+Prepare a statement once and execute it many times with different parameters.
+
+```typescript
+conn.prepare(statement: string): Promise<PreparedStatement>
+conn.prepareSync(statement: string): PreparedStatement
+
+conn.execute(
+  preparedStatement: PreparedStatement,
+  params?: Record<string, KuzuValue>,
+  progressCallback?: ProgressCallback,
+): Promise<QueryResult | QueryResult[]>
+
+conn.executeSync(
+  preparedStatement: PreparedStatement,
+  params?: Record<string, KuzuValue>,
+): QueryResult | QueryResult[]
+```
+
+```javascript
+const stmt = await conn.prepare(
+  "MATCH (p:Person) WHERE p.age > $minAge RETURN p.name"
+);
+
+const result = await conn.execute(stmt, { minAge: 20 });
+console.log(await result.getAll());
+```
+
+### Progress callbacks
+
+```javascript
+const result = await conn.query(
+  "MATCH (p:Person) RETURN p",
+  (pipelineProgress, numPipelinesFinished, numPipelines) => {
+    console.log(`Pipeline ${numPipelinesFinished + 1}/${numPipelines}: ${pipelineProgress.toFixed(1)}%`);
+  }
+);
+```
+
+### Connection settings
+
+```typescript
+conn.setMaxNumThreadForExec(numThreads: number): void
+conn.setQueryTimeout(timeoutInMs: number): void
+```
+
+### Closing
+
+```typescript
+await conn.close();   // async
+conn.closeSync();     // sync
+```
+
+---
+
+## QueryResult
+
+`QueryResult` holds the rows returned by a query. It is created internally by `conn.query()` / `conn.execute()`.
+
+### Checking for rows
+
+```typescript
+result.hasNext(): boolean
+result.getNumTuples(): number
+```
+
+### Reading rows
+
+```typescript
+// Async — returns Promise<Record<string, KuzuValue> | null>
+await result.getNext()
+
+// Sync — returns Record<string, KuzuValue> | null
+result.getNextSync()
+```
+
+### Bulk retrieval
+
+```typescript
+// Async
+await result.getAll()       // Promise<Record<string, KuzuValue>[]>
+
+// Sync
+result.getAllSync()          // Record<string, KuzuValue>[]
+```
+
+### Callbacks
+
+```typescript
+// Per-row callback
+result.each(
+  (row) => console.log(row),       // called for each row
+  () => console.log("done"),        // called when iteration ends
+  (err) => console.error(err),      // called on error
+);
+
+// All-rows callback
+result.all(
+  (rows) => console.log(rows),
+  (err) => console.error(err),
+);
+```
+
+### Schema
+
+```typescript
+await result.getColumnNames()         // Promise<string[]>
+result.getColumnNamesSync()           // string[]
+
+await result.getColumnDataTypes()     // Promise<string[]>
+result.getColumnDataTypesSync()       // string[]
+```
+
+### Query timing
+
+```typescript
+const summary = await result.getQuerySummary();
+// { compilingTime: number, executionTime: number }
+```
+
+### Iterating multiple statements
+
+When a single call to `conn.query()` contains multiple statements, it returns `QueryResult[]`.
+
+```javascript
+const results = await conn.query(
+  "CREATE (:Person {name: 'Carol'}); MATCH (p:Person) RETURN count(p)"
+);
+
+// results is an array — one QueryResult per statement
+for (const r of results) {
+  console.log(await r.getAll());
+}
+```
+
+### Closing
+
+```typescript
+result.close(): void
+```
+
+### Reset iterator
+
+```typescript
+result.resetIterator(): void
+```
+
+---
+
+## PreparedStatement
+
+Created by `conn.prepare()` / `conn.prepareSync()`.
+
+```typescript
+preparedStatement.isSuccess(): boolean
+preparedStatement.getErrorMessage(): string
+```
+
+---
+
+## TypeScript types
+
+The package ships a full `.d.ts` declaration file. Import types directly:
+
+```typescript
+import type { Database, Connection, QueryResult, KuzuValue, NodeValue, RelValue } from "kuzu";
+```
+
+Key types:
+
+```typescript
+// Any value Kuzu can return
+type KuzuValue =
+  | null | boolean | number | bigint | string | Date
+  | NodeValue | RelValue | RecursiveRelValue
+  | KuzuValue[] | { [key: string]: KuzuValue };
+
+interface NodeValue {
+  _label: string | null;
+  _id: { offset: number; table: number } | null;
+  [key: string]: any;
+}
+
+interface RelValue {
+  _src: { offset: number; table: number } | null;
+  _dst: { offset: number; table: number } | null;
+  _label: string | null;
+  [key: string]: any;
+}
+```
+
+---
+
+## Full example
+
+```javascript
+const kuzu = require("kuzu");
+
+async function main() {
+  const db = new kuzu.Database("./social_graph");
+  const conn = new kuzu.Connection(db);
+
+  // Schema
+  await conn.query(`
+    CREATE NODE TABLE Person(name STRING, age INT64, PRIMARY KEY(name))
+  `);
+  await conn.query(`
+    CREATE REL TABLE Knows(FROM Person TO Person, since INT64)
+  `);
+
+  // Data
+  await conn.query("CREATE (:Person {name: 'Alice', age: 30})");
+  await conn.query("CREATE (:Person {name: 'Bob',   age: 25})");
+  await conn.query(`
+    MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'})
+    CREATE (a)-[:Knows {since: 2020}]->(b)
+  `);
+
+  // Prepared statement with parameters
+  const stmt = await conn.prepare(
+    "MATCH (a:Person {name: $name})-[:Knows]->(b) RETURN b.name, b.age"
+  );
+  const result = await conn.execute(stmt, { name: "Alice" });
+  console.log(await result.getAll());
+
+  await db.close();
+}
+
+main().catch(console.error);
+```
+
+<Note>
+  BigInt values (e.g. `INT64`) are returned as JavaScript `bigint` primitives. Arithmetic on them requires the `n` suffix or explicit conversion: `Number(row["p.age"])`.
+</Note>

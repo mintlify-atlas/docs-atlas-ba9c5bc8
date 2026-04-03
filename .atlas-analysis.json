@@ -1,0 +1,104 @@
+{
+  "projectType": "data-platform",
+  "projectName": "Kuzu",
+  "projectDescription": "An embeddable, serverless property graph database built for speed, implementing the Cypher query language with native full-text search and vector indexing.",
+  "theme": "luma",
+  "primaryColor": "#5B4FE8",
+  "lightColor": "#EEF2FF",
+  "darkColor": "#3730A3",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation"
+            ]
+          },
+          {
+            "group": "Data Model & Queries",
+            "pages": [
+              "data-model/property-graph",
+              "data-model/cypher-basics",
+              "data-model/data-types",
+              "data-model/import-data"
+            ]
+          },
+          {
+            "group": "Client APIs",
+            "pages": [
+              "client-apis/python",
+              "client-apis/nodejs",
+              "client-apis/java",
+              "client-apis/rust",
+              "client-apis/cpp",
+              "client-apis/wasm"
+            ]
+          },
+          {
+            "group": "Extensions",
+            "pages": [
+              "extensions/overview",
+              "extensions/full-text-search",
+              "extensions/vector-search",
+              "extensions/graph-algorithms"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Reference",
+        "groups": [
+          {
+            "group": "Cypher Reference",
+            "pages": [
+              "reference/cypher-overview",
+              "reference/data-definition",
+              "reference/querying",
+              "reference/functions"
+            ]
+          },
+          {
+            "group": "Configuration & Operations",
+            "pages": [
+              "reference/database-configuration",
+              "reference/transactions",
+              "reference/performance-tuning"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Embedded, serverless graph database — no separate server process required",
+    "Cypher query language with full read/write support",
+    "Native full-text search (FTS) and vector indexing built in",
+    "Columnar disk-based storage with CSR adjacency list indices",
+    "Multi-core query parallelism with vectorized query processor",
+    "ACID transactions with serializable isolation",
+    "WebAssembly (Wasm) bindings for browser-based execution",
+    "Rich extension system: algo, json, httpfs, duckdb, postgres, and more",
+    "Multi-language APIs: Python, Node.js, Java, Rust, C/C++",
+    "PyTorch Geometric integration for graph ML workloads"
+  ],
+  "publicApiSurface": [
+    "kuzu.Database(database_path, buffer_pool_size, max_num_threads, compression, read_only)",
+    "kuzu.Connection(database, num_threads)",
+    "Connection.execute(query, parameters) -> QueryResult",
+    "Connection.create_function(name, udf, params_type, return_type)",
+    "QueryResult.has_next() / get_next() / as_df() / as_arrow()",
+    "Database.get_torch_geometric_remote_backend()",
+    "C API: kuzu_database_init / kuzu_connection_init / kuzu_connection_query",
+    "INSTALL <extension> FROM '<server>'",
+    "CALL fts_index('table', ['col1', 'col2'])",
+    "CALL vector_index('table', 'col', 'cosine')",
+    "MATCH / CREATE / MERGE / DELETE / SET (Cypher DML)",
+    "CREATE NODE TABLE / CREATE REL TABLE (Cypher DDL)",
+    "COPY FROM (CSV, Parquet, JSON bulk import)"
+  ]
+}

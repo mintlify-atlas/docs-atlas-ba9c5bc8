@@ -1,0 +1,261 @@
+---
+title: "Vector similarity search"
+description: "Build HNSW approximate nearest-neighbor indexes on embedding columns and run k-nearest-neighbor queries using the vector extension."
+keywords: ["vector search", "HNSW", "embeddings", "nearest neighbor", "cosine", "L2", "dot product", "CREATE_VECTOR_INDEX", "QUERY_VECTOR_INDEX"]
+---
+
+The `vector` extension adds approximate nearest-neighbor (ANN) search to Kuzu. It builds an HNSW (Hierarchical Navigable Small World) index over a fixed-length array column (`FLOAT[n]` or `DOUBLE[n]`) on a node table and answers k-nearest-neighbor queries using cosine similarity, Euclidean distance, or dot product.
+
+<Note>
+The `vector` extension is pre-installed in Kuzu v0.11.3 and later. You only need to load it — no separate installation step is required.
+</Note>
+
+## Loading the extension
+
+```cypher
+LOAD EXTENSION vector;
+```
+
+For versions before v0.11.3, install from a repository first:
+
+```cypher
+INSTALL vector FROM 'http://localhost:8080/';
+LOAD EXTENSION vector;
+```
+
+## Storing embeddings
+
+Embeddings must be stored as a fixed-length array column. Use `FLOAT[n]` for 32-bit floats (typical for most embedding models) or `DOUBLE[n]` for 64-bit floats.
+
+```cypher
+CREATE NODE TABLE Book (
+    ID              SERIAL,
+    title           STRING,
+    published_year  INT64,
+    title_embedding FLOAT[384],
+    PRIMARY KEY (ID)
+);
+```
+
+Insert rows with embedding arrays:
+
+```cypher
+CREATE (:Book {
+    title: 'The Quantum World',
+    published_year: 2005,
+    title_embedding: [0.12, -0.34, 0.56, /* ... 384 values total */]
+});
+```
+
+### Loading embeddings from Python
+
+In practice, embeddings come from an external model. Use the Python client to insert them:
+
+```python
+import kuzu
+from sentence_transformers import SentenceTransformer
+
+db = kuzu.Database("./mydb")
+conn = kuzu.Connection(db)
+
+conn.execute("LOAD EXTENSION vector")
+conn.execute("""
+    CREATE NODE TABLE Article (
+        id    SERIAL,
+        text  STRING,
+        emb   FLOAT[384],
+        PRIMARY KEY (id)
+    )
+""")
+
+model = SentenceTransformer("all-MiniLM-L6-v2")
+
+texts = ["Quantum computing fundamentals", "History of ancient Rome", "Introduction to machine learning"]
+embeddings = model.encode(texts).tolist()
+
+for text, emb in zip(texts, embeddings):
+    conn.execute("CREATE (:Article {text: $text, emb: $emb})", {"text": text, "emb": emb})
+```
+
+## Creating an index
+
+Use `CREATE_VECTOR_INDEX` to build an HNSW index over an array column.
+
+```cypher
+CALL CREATE_VECTOR_INDEX('<table_name>', '<index_name>', '<column_name>');
+```
+
+### Example
+
+```cypher
+CALL CREATE_VECTOR_INDEX('Book', 'title_vec_index', 'title_embedding');
+```
+
+By default, the index uses cosine distance. Specify a different metric with the `metric` parameter:
+
+```cypher
+-- L2 (Euclidean) distance
+CALL CREATE_VECTOR_INDEX('Book', 'title_vec_index', 'title_embedding', metric := 'l2');
+
+-- Dot product (higher = more similar)
+CALL CREATE_VECTOR_INDEX('Book', 'title_vec_index', 'title_embedding', metric := 'dotproduct');
+```
+
+### Index creation parameters
+
+| Parameter          | Type   | Default | Description |
+|--------------------|--------|---------|-------------|
+| `metric`           | STRING | `'cosine'` | Distance function. One of `'cosine'`, `'l2'`, `'l2sq'`, `'dotproduct'` (alias: `'dot_product'`). |
+| `mu`               | INT64  | `30`    | Maximum degree (number of neighbors) in the upper HNSW layer. |
+| `ml`               | INT64  | `60`    | Maximum degree in the lower HNSW layer. |
+| `pu`               | DOUBLE | `0.05`  | Probability of inserting a node into the upper layer. Must be in `[0, 1]`. |
+| `efc`              | INT64  | `200`   | Size of the candidate set used during index construction. Larger values improve recall at the cost of build time. |
+| `alpha`            | DOUBLE | `1.1`   | Relaxation factor for pruning neighbors during construction. Must be ≥ 1. |
+| `cache_embeddings` | BOOL   | `true`  | Keep the embedding column in memory during construction for faster builds. Set to `false` to reduce memory usage. |
+| `skip_if_exists`   | BOOL   | `false` | Skip index creation silently if an index with the same name already exists. |
+
+## Querying an index
+
+Use `QUERY_VECTOR_INDEX` to find the k nearest neighbors to a query vector.
+
+```cypher
+CALL QUERY_VECTOR_INDEX('<table_name>', '<index_name>', <query_vector>, <k>)
+RETURN node.<property>
+ORDER BY distance;
+```
+
+The function yields two columns: `node` (the matched node) and `distance` (the computed distance value — lower is closer for `l2`/`cosine`, higher is closer for `dotproduct`). Always include `ORDER BY distance` to get results sorted by similarity.
+
+### Example
+
+```cypher
+CALL QUERY_VECTOR_INDEX('Book', 'title_vec_index', [0.12, -0.34, 0.56, /* ... */], 2)
+RETURN node.title
+ORDER BY distance;
+```
+
+```
+┌─────────────────────┐
+│ node.title          │
+├─────────────────────┤
+│ The Quantum World   │
+│ Learning Machines   │
+└─────────────────────┘
+```
+
+### Query parameters
+
+| Parameter | Type   | Default | Description |
+|-----------|--------|---------|-------------|
+| `efs`     | INT64  | `200`   | Size of the candidate set used during search. Higher values improve recall at the cost of query latency. Must be ≥ 1. |
+
+```cypher
+-- Increase search quality at the cost of speed
+CALL QUERY_VECTOR_INDEX('Book', 'title_vec_index', [/* ... */], 5, efs := 500)
+RETURN node.title
+ORDER BY distance;
+```
+
+### Using YIELD for explicit column binding
+
+Use `YIELD` to rename the output columns before chaining additional clauses:
+
+```cypher
+CALL QUERY_VECTOR_INDEX('Book', 'title_vec_index', [/* ... */], 3, efs := 500)
+YIELD node AS book, distance AS dist
+RETURN book.title, dist
+ORDER BY dist;
+```
+
+## Filtered vector search
+
+You can restrict the search to a subset of nodes by first creating a projected graph with `project_graph_cypher`, then querying the index against that projection.
+
+```cypher
+-- Project only books published after 2010
+CALL project_graph_cypher('RecentBooks', 'MATCH (n:Book) WHERE n.published_year > 2010 RETURN n');
+
+CALL QUERY_VECTOR_INDEX('RecentBooks', 'title_vec_index', [/* ... */], 2)
+RETURN node.title
+ORDER BY distance;
+```
+
+You can also traverse relationships after the vector search to enrich results:
+
+```cypher
+CALL project_graph_cypher('G1', 'MATCH (n:Book) WHERE n.published_year > 2010 RETURN n');
+
+CALL QUERY_VECTOR_INDEX('G1', 'title_vec_index', [/* ... */], 2)
+YIELD node, distance
+MATCH (node)-[]->(author:Person)
+RETURN node.title, author.name
+ORDER BY distance;
+```
+
+## End-to-end example
+
+<Steps>
+  <Step title="Load the extension">
+    ```cypher
+    LOAD EXTENSION vector;
+    ```
+  </Step>
+  <Step title="Create a table with an embedding column">
+    ```cypher
+    CREATE NODE TABLE Document (
+        id    SERIAL,
+        text  STRING,
+        emb   FLOAT[8],
+        PRIMARY KEY (id)
+    );
+    ```
+  </Step>
+  <Step title="Insert rows with embeddings">
+    ```cypher
+    CREATE (:Document {text: 'Quantum computing', emb: [0.15, 0.30, 0.54, 0.28, 0.56, 0.56, 0.14, 0.86]});
+    CREATE (:Document {text: 'Ancient history',   emb: [0.05, 0.82, 0.06, 0.71, 0.13, 0.30, 0.09, 0.41]});
+    CREATE (:Document {text: 'Machine learning',  emb: [0.12, 0.25, 0.48, 0.33, 0.60, 0.51, 0.18, 0.77]});
+    ```
+  </Step>
+  <Step title="Build the HNSW index">
+    ```cypher
+    CALL CREATE_VECTOR_INDEX('Document', 'doc_vec_idx', 'emb', metric := 'cosine');
+    ```
+  </Step>
+  <Step title="Run a nearest-neighbor query">
+    ```cypher
+    CALL QUERY_VECTOR_INDEX(
+        'Document',
+        'doc_vec_idx',
+        CAST([0.13, 0.27, 0.50, 0.31, 0.58, 0.53, 0.16, 0.80], 'FLOAT[8]'),
+        2
+    )
+    RETURN node.text, distance
+    ORDER BY distance;
+    ```
+  </Step>
+</Steps>
+
+## Index lifecycle
+
+### Listing indexes
+
+```cypher
+CALL SHOW_INDEXES() RETURN *;
+```
+
+The output includes the index type (`HNSW`), the indexed column, and the full creation command that can be replayed to recreate the index.
+
+### Dropping an index
+
+```cypher
+CALL DROP_VECTOR_INDEX('Book', 'title_vec_index');
+```
+
+## Behavior notes
+
+- **Index persistence** — HNSW indexes are stored on disk and survive database restarts. The `vector` extension must be loaded after a restart for the index to be queryable.
+- **Dynamic updates** — Newly inserted nodes are automatically indexed. Deleted nodes are excluded from query results. The index does not need to be rebuilt after modifications.
+- **Null embeddings** — Nodes with a `NULL` embedding value are skipped during index construction and excluded from query results.
+- **Distance metric interpretation** — For `cosine` and `l2`/`l2sq`, lower `distance` means more similar. For `dotproduct`, results are ranked by descending inner product, but the `distance` column reflects a transformed value so that `ORDER BY distance` still returns the most similar results first.
+- **Recall vs. speed tradeoff** — Increasing `efs` at query time and `efc` at index-build time both improve recall (finding the true nearest neighbors) at the cost of higher latency.

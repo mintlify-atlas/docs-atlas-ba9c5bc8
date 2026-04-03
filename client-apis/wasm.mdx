@@ -1,0 +1,376 @@
+---
+title: "WebAssembly API"
+description: "Run Kuzu in the browser or in Node.js/Deno using the @kuzu/kuzu-wasm package. Every operation is Promise-based and executes in a worker thread."
+---
+
+## Installation
+
+```bash
+npm install @kuzu/kuzu-wasm
+```
+
+## How it works
+
+The WebAssembly build compiles the full Kuzu C++ engine to `.wasm` and wraps it in a thin JavaScript layer. To keep the main thread responsive, all Wasm calls are dispatched to a **Web Worker** (browser) or a **Node.js worker thread** via a message-passing dispatcher. As a result, every API method returns a `Promise`.
+
+<Note>
+  Because every call crosses a worker-thread boundary, there is a small serialization overhead compared to the native Node.js binding. For throughput-sensitive workloads consider the native `kuzu` npm package instead.
+</Note>
+
+---
+
+## Quickstart
+
+```javascript
+const kuzu = require("@kuzu/kuzu-wasm");
+
+async function main() {
+  // Optional: initialize explicitly before any queries
+  await kuzu.init();
+
+  const db   = new kuzu.Database("./my_graph");
+  const conn = new kuzu.Connection(db);
+
+  await conn.query("CREATE NODE TABLE Person(name STRING, age INT64, PRIMARY KEY(name))");
+  await conn.query("CREATE (:Person {name: 'Alice', age: 25})");
+  await conn.query("CREATE (:Person {name: 'Bob', age: 30})");
+
+  const result = await conn.query("MATCH (p:Person) RETURN p.name, p.age");
+  console.log(await result.getAllObjects());
+
+  await result.close();
+  await conn.close();
+  await db.close();
+  await kuzu.close();
+}
+
+main();
+```
+
+---
+
+## Module-level API
+
+```javascript
+const kuzu = require("@kuzu/kuzu-wasm");
+
+// Initialize the Wasm worker (optional — called automatically on first use)
+await kuzu.init();
+
+// Retrieve version information
+const version        = await kuzu.getVersion();        // string
+const storageVersion = await kuzu.getStorageVersion(); // BigInt
+
+// Override the default worker script path (must be called before any other function)
+kuzu.setWorkerPath("/custom/path/to/worker.js");
+
+// Destroy the worker and release all resources
+await kuzu.close();
+```
+
+<Note>
+  `setWorkerPath()` must be called before any other module function. If the worker cannot be found, initialization will fail.
+</Note>
+
+---
+
+## Database
+
+`Database` manages all database components. Initialization is lazy.
+
+```javascript
+new kuzu.Database(
+  databasePath,           // string   — path or ":memory:"
+  bufferPoolSize = 0,     // number   — bytes; 0 = auto-detect
+  maxNumThreads  = 0,     // number   — 0 = auto-detect
+  enableCompression = true,
+  readOnly          = false,
+  autoCheckpoint    = true,
+  checkpointThreshold = 16777216  // bytes (default 16 MB)
+)
+```
+
+<ParamField path="databasePath" type="string">
+  Path to the database directory in the virtual file system. Pass `":memory:"`, an empty string, or omit to create an in-memory database.
+</ParamField>
+
+<ParamField path="bufferPoolSize" type="number" default="0">
+  Maximum buffer pool size in bytes. `0` uses an auto-detected size.
+</ParamField>
+
+<ParamField path="maxNumThreads" type="number" default="0">
+  Maximum threads for query execution. `0` auto-detects from CPU hardware concurrency.
+</ParamField>
+
+<ParamField path="enableCompression" type="boolean" default="true">
+  Enable on-disk compression.
+</ParamField>
+
+<ParamField path="readOnly" type="boolean" default="false">
+  Open in read-only mode.
+</ParamField>
+
+<ParamField path="autoCheckpoint" type="boolean" default="true">
+  Automatically checkpoint when the WAL file grows beyond `checkpointThreshold`.
+</ParamField>
+
+<ParamField path="checkpointThreshold" type="number" default="16777216">
+  WAL file size threshold in bytes that triggers a checkpoint.
+</ParamField>
+
+### Methods
+
+```typescript
+// Explicitly initialize (optional)
+await db.init(): Promise<void>
+
+// Close the database and release Wasm-side resources
+await db.close(): Promise<void>
+```
+
+### In-memory database
+
+```javascript
+const db = new kuzu.Database();          // in-memory (no path)
+const db = new kuzu.Database(":memory:"); // explicit
+```
+
+---
+
+## Connection
+
+```javascript
+new kuzu.Connection(database, numThreads = null)
+```
+
+<ParamField path="database" type="Database">
+  The `Database` instance to connect to.
+</ParamField>
+
+<ParamField path="numThreads" type="number | null" default="null">
+  Optional maximum threads for query execution on this connection.
+</ParamField>
+
+### Methods
+
+```typescript
+// Execute a Cypher query string
+await conn.query(statement: string): Promise<QueryResult>
+
+// Prepare a statement
+await conn.prepare(statement: string): Promise<PreparedStatement>
+
+// Execute a prepared statement with parameters
+await conn.execute(preparedStatement: PreparedStatement, params?: object): Promise<QueryResult>
+
+// Connection settings
+await conn.setMaxNumThreadForExec(numThreads: number): Promise<void>
+await conn.setQueryTimeout(timeoutInMs: number): Promise<void>
+await conn.getMaxNumThreadForExec(): Promise<number>
+
+// Close the connection
+await conn.close(): Promise<void>
+```
+
+### Executing a query
+
+```javascript
+const result = await conn.query("MATCH (p:Person) RETURN p.name, p.age");
+const rows   = await result.getAllObjects();
+console.log(rows);
+// [{ 'p.name': 'Alice', 'p.age': 25 }, { 'p.name': 'Bob', 'p.age': 30 }]
+await result.close();
+```
+
+### Prepared statements
+
+```javascript
+const stmt = await conn.prepare(
+  "MATCH (p:Person) WHERE p.age > $minAge RETURN p.name"
+);
+
+const result = await conn.execute(stmt, { minAge: 20 });
+console.log(await result.getAllObjects());
+await result.close();
+```
+
+---
+
+## QueryResult
+
+`QueryResult` holds the output of a query. All methods are asynchronous.
+
+```typescript
+// Status
+result.isSuccess(): boolean                        // synchronous — cached from worker
+await result.getErrorMessage(): Promise<string>
+
+// Shape
+result.hasNext(): boolean                          // synchronous — cached
+result.hasNextQueryResult(): boolean               // synchronous — cached
+await result.getNumColumns(): Promise<number>
+await result.getNumTuples(): Promise<number>
+await result.getColumnNames(): Promise<string[]>
+await result.getColumnTypes(): Promise<string[]>
+
+// Row iteration
+await result.getNext(): Promise<any[]>
+await result.getAllRows(): Promise<any[][]>
+await result.getAllObjects(): Promise<object[]>
+
+// Iterator control
+await result.resetIterator(): Promise<void>
+
+// Multiple result sets (multi-statement queries)
+await result.getNextQueryResult(): Promise<QueryResult>
+
+// Diagnostics
+await result.toString(): Promise<string>
+await result.getQuerySummary(): Promise<{ compilingTime: number; executionTime: number }>
+
+// Close and release Wasm-side resources
+await result.close(): Promise<void>
+```
+
+### Row format differences
+
+| Method | Returns |
+|---|---|
+| `getNext()` | `any[]` — positional array |
+| `getAllRows()` | `any[][]` — array of positional arrays |
+| `getAllObjects()` | `object[]` — array of `{ columnName: value }` objects |
+
+### Multi-statement results
+
+```javascript
+const result = await conn.query(
+  "CREATE (:Person {name: 'Carol', age: 22}); MATCH (p:Person) RETURN count(p)"
+);
+
+// First result set
+console.log(await result.getAllObjects());
+
+// Advance to the next result set
+if (result.hasNextQueryResult()) {
+  const next = await result.getNextQueryResult();
+  console.log(await next.getAllObjects());
+  await next.close();
+}
+
+await result.close();
+```
+
+---
+
+## File system access
+
+The Wasm build exposes the Emscripten virtual file system through `kuzu.FS`. This lets you read and write files that the Wasm engine can access.
+
+```javascript
+const kuzu = require("@kuzu/kuzu-wasm");
+
+// Write a CSV into the virtual FS so Kuzu can COPY FROM it
+kuzu.FS.writeFile("/data/people.csv", "Alice,30\nBob,25\n");
+
+const db   = new kuzu.Database("/kuzu_db");
+const conn = new kuzu.Connection(db);
+
+await conn.query(
+  "CREATE NODE TABLE Person(name STRING, age INT64, PRIMARY KEY(name))"
+);
+await conn.query("COPY Person FROM '/data/people.csv'");
+
+const result = await conn.query("MATCH (p:Person) RETURN p");
+console.log(await result.getAllObjects());
+```
+
+---
+
+## Browser usage
+
+```html
+<script type="module">
+import kuzu from "https://cdn.jsdelivr.net/npm/@kuzu/kuzu-wasm/dist/kuzu.mjs";
+
+await kuzu.init();
+
+const db   = new kuzu.Database(":memory:");
+const conn = new kuzu.Connection(db);
+
+await conn.query("CREATE NODE TABLE Person(name STRING, PRIMARY KEY(name))");
+await conn.query("CREATE (:Person {name: 'Alice'})");
+
+const result = await conn.query("MATCH (p:Person) RETURN p.name");
+console.log(await result.getAllObjects());
+
+await kuzu.close();
+</script>
+```
+
+<Warning>
+  Browser environments have limited file-system access. Use an in-memory database (`:memory:`) unless you are using the [Origin Private File System (OPFS)](https://developer.mozilla.org/en-US/docs/Web/API/File_System_API/Origin_private_file_system) or another persistence mechanism.
+</Warning>
+
+---
+
+## Limitations vs. native
+
+| Feature | Wasm | Native (Node.js) |
+|---|---|---|
+| All `Promise`-based | Yes (required) | Async and sync variants |
+| Synchronous query API | No | Yes (`querySync`, `executeSync`) |
+| File system access | Virtual FS (Emscripten) | Host OS file system |
+| Browser support | Yes | No |
+| Performance overhead | Small (serialization) | Minimal |
+| Extensions | Not supported | Supported |
+| PyTorch Geometric | Not applicable | Via Python API |
+
+---
+
+## Full example
+
+```javascript
+const kuzu = require("@kuzu/kuzu-wasm");
+
+async function main() {
+  await kuzu.init();
+
+  const db   = new kuzu.Database("./social_graph");
+  const conn = new kuzu.Connection(db);
+
+  // Schema
+  await conn.query(
+    "CREATE NODE TABLE Person(name STRING, age INT64, PRIMARY KEY(name))"
+  );
+  await conn.query(
+    "CREATE REL TABLE Knows(FROM Person TO Person, since INT64)"
+  );
+
+  // Data
+  await conn.query("CREATE (:Person {name: 'Alice', age: 30})");
+  await conn.query("CREATE (:Person {name: 'Bob',   age: 25})");
+  await conn.query(`
+    MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'})
+    CREATE (a)-[:Knows {since: 2020}]->(b)
+  `);
+
+  // Prepared statement with parameters
+  const stmt = await conn.prepare(
+    "MATCH (a:Person {name: $name})-[:Knows]->(b) RETURN b.name, b.age"
+  );
+  const result = await conn.execute(stmt, { name: "Alice" });
+
+  console.log(await result.getAllObjects());
+  // [{ 'b.name': 'Bob', 'b.age': 25 }]
+
+  console.log(await result.getQuerySummary());
+  // { compilingTime: ..., executionTime: ... }
+
+  await result.close();
+  await conn.close();
+  await db.close();
+  await kuzu.close();
+}
+
+main().catch(console.error);
+```

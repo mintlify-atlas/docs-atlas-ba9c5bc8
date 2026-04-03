@@ -1,80 +1,257 @@
 ---
 title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+description: "Create a graph database, define a schema, load data, and run Cypher queries — all in under five minutes with Python."
+keywords: ["quickstart", "getting started", "Python", "Cypher", "graph database"]
 ---
 
-## Get started in three steps
+This guide walks you through creating a small social graph using the Python API. You will define node and relationship tables, load data, and query the graph with Cypher.
 
-Get your documentation site running locally and make your first customization.
+<Note>
+  Make sure you have Python 3.8 or higher installed. If you haven't installed Kuzu yet, see the [installation guide](/installation).
+</Note>
 
-### Step 1: Set up your local environment
+## Full working example
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+The example below creates a social graph with `User` and `City` nodes connected by `Follows` and `LivesIn` relationships. This is the same schema used in Kuzu's [demo dataset](https://github.com/kuzudb/kuzu/tree/master/dataset/demo-db/csv).
 
-### Step 2: Deploy your changes
+```python
+import kuzu
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+# Open a persistent database (or use ":memory:" for in-memory)
+db = kuzu.Database("./demo_db")
+conn = kuzu.Connection(db)
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+# Define the schema
+conn.execute("CREATE NODE TABLE User(name STRING, age INT64, PRIMARY KEY (name))")
+conn.execute("CREATE NODE TABLE City(name STRING, population INT64, PRIMARY KEY (name))")
+conn.execute("CREATE REL TABLE Follows(FROM User TO User, since INT64)")
+conn.execute("CREATE REL TABLE LivesIn(FROM User TO City)")
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+# Insert nodes
+conn.execute("CREATE (:User {name: 'Adam',    age: 30})")
+conn.execute("CREATE (:User {name: 'Karissa', age: 40})")
+conn.execute("CREATE (:User {name: 'Zhang',   age: 50})")
+conn.execute("CREATE (:User {name: 'Noura',   age: 25})")
+conn.execute("CREATE (:City {name: 'Waterloo',  population: 150000})")
+conn.execute("CREATE (:City {name: 'Kitchener', population: 250000})")
+conn.execute("CREATE (:City {name: 'Guelph',    population: 130000})")
 
-### Step 3: Go live
+# Insert relationships
+conn.execute("MATCH (a:User {name: 'Adam'}),    (b:User {name: 'Karissa'}) CREATE (a)-[:Follows {since: 2020}]->(b)")
+conn.execute("MATCH (a:User {name: 'Adam'}),    (b:User {name: 'Zhang'})   CREATE (a)-[:Follows {since: 2020}]->(b)")
+conn.execute("MATCH (a:User {name: 'Karissa'}), (b:User {name: 'Zhang'})   CREATE (a)-[:Follows {since: 2021}]->(b)")
+conn.execute("MATCH (a:User {name: 'Zhang'}),   (b:User {name: 'Noura'})   CREATE (a)-[:Follows {since: 2022}]->(b)")
+conn.execute("MATCH (u:User {name: 'Adam'}),    (c:City {name: 'Waterloo'})  CREATE (u)-[:LivesIn]->(c)")
+conn.execute("MATCH (u:User {name: 'Karissa'}), (c:City {name: 'Waterloo'})  CREATE (u)-[:LivesIn]->(c)")
+conn.execute("MATCH (u:User {name: 'Zhang'}),   (c:City {name: 'Kitchener'}) CREATE (u)-[:LivesIn]->(c)")
+conn.execute("MATCH (u:User {name: 'Noura'}),   (c:City {name: 'Guelph'})    CREATE (u)-[:LivesIn]->(c)")
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+# Query: who does Adam follow?
+result = conn.execute(
+    "MATCH (a:User {name: 'Adam'})-[:Follows]->(b:User) RETURN b.name, b.age"
+)
+while result.has_next():
+    print(result.get_next())
+# ['Karissa', 40]
+# ['Zhang', 50]
+```
+
+---
+
+## Step-by-step walkthrough
+
+<Steps>
+  <Step title="Install Kuzu">
+    Install the `kuzu` package from PyPI using pip.
+
+    ```bash
+    pip install kuzu
+    ```
+
+    Kuzu requires **Python 3.8 or higher**. No additional system dependencies are needed — the native library is bundled in the wheel.
+  </Step>
+
+  <Step title="Create a database and connection">
+    Import `kuzu` and open a database. Pass a directory path to store the database on disk, or use `":memory:"` (or `None`) for a temporary in-memory database.
+
+    ```python
+    import kuzu
+
+    # Persistent database stored at ./demo_db
+    db = kuzu.Database("./demo_db")
+
+    # In-memory database (data is lost when the process exits)
+    # db = kuzu.Database(":memory:")
+
+    conn = kuzu.Connection(db)
+    ```
+
+    <Tip>
+      Use the database as a context manager to ensure it is closed cleanly even if an exception occurs.
+
+      ```python
+      with kuzu.Database("./demo_db") as db:
+          conn = kuzu.Connection(db)
+          # ... queries
+      ```
+    </Tip>
+  </Step>
+
+  <Step title="Define the schema">
+    Create node tables and relationship tables using Cypher DDL statements. Each node table must declare a primary key.
+
+    ```python
+    # Node tables
+    conn.execute("CREATE NODE TABLE User(name STRING, age INT64, PRIMARY KEY (name))")
+    conn.execute("CREATE NODE TABLE City(name STRING, population INT64, PRIMARY KEY (name))")
+
+    # Relationship tables
+    conn.execute("CREATE REL TABLE Follows(FROM User TO User, since INT64)")
+    conn.execute("CREATE REL TABLE LivesIn(FROM User TO City)")
+    ```
+
+    `Follows` is a relationship from `User` to `User` with a `since` property. `LivesIn` is a relationship from `User` to `City` with no additional properties.
+  </Step>
+
+  <Step title="Load data">
+    You can insert data row-by-row with `CREATE`, or bulk-load from CSV files using `COPY ... FROM`.
+
+    <Tabs>
+      <Tab title="CREATE statements">
+        ```python
+        conn.execute("CREATE (:User {name: 'Adam',    age: 30})")
+        conn.execute("CREATE (:User {name: 'Karissa', age: 40})")
+        conn.execute("CREATE (:City {name: 'Waterloo', population: 150000})")
+
+        conn.execute(
+            "MATCH (a:User {name: 'Adam'}), (b:User {name: 'Karissa'}) "
+            "CREATE (a)-[:Follows {since: 2020}]->(b)"
+        )
+        conn.execute(
+            "MATCH (u:User {name: 'Adam'}), (c:City {name: 'Waterloo'}) "
+            "CREATE (u)-[:LivesIn]->(c)"
+        )
+        ```
+      </Tab>
+      <Tab title="COPY FROM CSV">
+        ```python
+        # Bulk-load from CSV files (fastest for large datasets)
+        conn.execute('COPY User FROM "user.csv"')
+        conn.execute('COPY City FROM "city.csv"')
+        conn.execute('COPY Follows FROM "follows.csv"')
+        conn.execute('COPY LivesIn FROM "lives-in.csv"')
+        ```
+
+        CSV files for the demo dataset are available in the [Kuzu repository](https://github.com/kuzudb/kuzu/tree/master/dataset/demo-db/csv).
+      </Tab>
+    </Tabs>
+  </Step>
+
+  <Step title="Run queries">
+    Use `conn.execute()` to run Cypher queries. The method returns a `QueryResult` object.
+
+    ```cypher
+    -- Find all users and their ages
+    MATCH (u:User) RETURN u.name, u.age;
+
+    -- Find who Adam follows
+    MATCH (a:User {name: 'Adam'})-[:Follows]->(b:User)
+    RETURN b.name, b.age;
+
+    -- Find users and the cities they live in
+    MATCH (u:User)-[:LivesIn]->(c:City)
+    RETURN u.name, c.name;
+
+    -- Two-hop traversal: find friends-of-friends
+    MATCH (a:User {name: 'Adam'})-[:Follows]->(b:User)-[:Follows]->(c:User)
+    RETURN a.name, b.name, c.name;
+    ```
+
+    ```python
+    result = conn.execute(
+        "MATCH (u:User)-[:LivesIn]->(c:City) RETURN u.name, c.name"
+    )
+    while result.has_next():
+        print(result.get_next())
+    # ['Adam', 'Waterloo']
+    # ['Karissa', 'Waterloo']
+    # ['Zhang', 'Kitchener']
+    # ['Noura', 'Guelph']
+    ```
+  </Step>
+
+  <Step title="Iterate results and convert to DataFrame">
+    `QueryResult` is iterable. Use `has_next()` and `get_next()` to read rows one at a time, or call `get_as_df()` to convert the entire result to a pandas DataFrame.
+
+    ```python
+    # Iterate row by row
+    result = conn.execute("MATCH (u:User) RETURN u.name, u.age")
+    while result.has_next():
+        row = result.get_next()  # returns a list: ['Adam', 30]
+        print(row)
+
+    # Convert to a pandas DataFrame
+    result = conn.execute("MATCH (u:User) RETURN u.name, u.age ORDER BY u.age")
+    df = result.get_as_df()
+    print(df)
+    #      u.name  u.age
+    # 0     Noura     25
+    # 1      Adam     30
+    # 2   Karissa     40
+    # 3     Zhang     50
+
+    # Convert to a Polars DataFrame
+    result = conn.execute("MATCH (u:User) RETURN u.name, u.age")
+    pl_df = result.get_as_pl()
+
+    # Convert to a PyArrow Table
+    result = conn.execute("MATCH (u:User) RETURN u.name, u.age")
+    arrow_table = result.get_as_arrow()
+    ```
+
+    <Tip>
+      `QueryResult` also supports the Python iterator protocol, so you can use it directly in a `for` loop.
+
+      ```python
+      for row in conn.execute("MATCH (u:User) RETURN u.name, u.age"):
+          print(row)
+      ```
+    </Tip>
+  </Step>
+</Steps>
+
+## In-memory mode
+
+Pass `":memory:"` or `None` as the database path to create a database that lives only in RAM. In-memory databases are useful for testing and prototyping — no files are written, and all data is lost when the process exits.
+
+```python
+import kuzu
+
+db = kuzu.Database(":memory:")
+conn = kuzu.Connection(db)
+
+conn.execute("CREATE NODE TABLE Person(name STRING, age INT64, PRIMARY KEY (name))")
+conn.execute("CREATE (:Person {name: 'Alice', age: 25})")
+
+result = conn.execute("MATCH (p:Person) RETURN p.name, p.age")
+while result.has_next():
+    print(result.get_next())
+# ['Alice', 25]
+```
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
-
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Installation" icon="download" href="/installation">
+    Install Kuzu for Node.js, Java, Rust, C/C++, or WebAssembly
+  </Card>
+  <Card title="Property graph model" icon="diagram-project" href="/data-model/property-graph">
+    Learn about node tables, relationship tables, and property types
+  </Card>
+  <Card title="Cypher basics" icon="brackets-curly" href="/data-model/cypher-basics">
+    MATCH, CREATE, MERGE, and other Cypher clauses explained
+  </Card>
+  <Card title="Python API" icon="code" href="/client-apis/python">
+    Full reference for the Python client library
+  </Card>
 </CardGroup>
-
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>

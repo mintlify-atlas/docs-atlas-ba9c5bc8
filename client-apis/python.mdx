@@ -1,0 +1,505 @@
+---
+title: "Python API"
+description: "Use Kuzu from Python with a simple, Pythonic API that supports pandas, PyArrow, Polars, NetworkX, and PyTorch Geometric."
+---
+
+## Installation
+
+```bash
+pip install kuzu
+```
+
+## Quickstart
+
+```python
+import kuzu
+
+db = kuzu.Database("./my_graph")
+conn = kuzu.Connection(db)
+
+conn.execute("CREATE NODE TABLE Person(name STRING, age INT64, PRIMARY KEY(name))")
+conn.execute("CREATE (:Person {name: 'Alice', age: 25})")
+conn.execute("CREATE (:Person {name: 'Bob', age: 30})")
+
+result = conn.execute("MATCH (p:Person) RETURN p.name, p.age")
+while result.has_next():
+    print(result.get_next())
+```
+
+---
+
+## Database
+
+`kuzu.Database` is the main entry point. It manages all database components and must be created before any connections.
+
+```python
+class Database(
+    database_path: str | Path | None = None,
+    *,
+    buffer_pool_size: int = 0,
+    max_num_threads: int = 0,
+    compression: bool = True,
+    lazy_init: bool = False,
+    read_only: bool = False,
+    max_db_size: int = (1 << 43),
+    auto_checkpoint: bool = True,
+    checkpoint_threshold: int = -1,
+    throw_on_wal_replay_failure: bool = True,
+    enable_checksums: bool = True,
+)
+```
+
+<ParamField path="database_path" type="str | Path | None" default="None">
+  Path to the database directory. Pass `None`, an empty string, or `":memory:"` to create an in-memory database that is not persisted to disk.
+</ParamField>
+
+<ParamField path="buffer_pool_size" type="int" default="0">
+  Maximum size of the buffer pool in bytes. A larger buffer pool reduces file I/O by keeping more data in memory. Defaults to roughly 80% of available system memory when set to `0`.
+</ParamField>
+
+<ParamField path="max_num_threads" type="int" default="0">
+  Maximum number of threads for query execution. Defaults to the number of CPU cores when set to `0`.
+</ParamField>
+
+<ParamField path="compression" type="bool" default="True">
+  Enable on-disk compression for supported column types.
+</ParamField>
+
+<ParamField path="lazy_init" type="bool" default="False">
+  If `True`, the database is not initialized until the first query is executed. Useful when the database is used in a thread other than the one that created it, or when the process is forked.
+</ParamField>
+
+<ParamField path="read_only" type="bool" default="False">
+  Open the database in read-only mode. Multiple read-only `Database` objects can share the same path, but they cannot coexist with a read-write instance.
+</ParamField>
+
+<ParamField path="max_db_size" type="int" default="1 << 43">
+  Maximum database size in bytes. The default is 8 TB on 64-bit systems and 1 GB on 32-bit systems.
+</ParamField>
+
+<ParamField path="auto_checkpoint" type="bool" default="True">
+  Automatically checkpoint when the WAL file grows beyond `checkpoint_threshold`.
+</ParamField>
+
+<ParamField path="checkpoint_threshold" type="int" default="-1">
+  WAL file size in bytes that triggers an automatic checkpoint. A value of `-1` uses the library default (16 MB).
+</ParamField>
+
+<ParamField path="throw_on_wal_replay_failure" type="bool" default="True">
+  If `True`, a WAL replay error on startup raises an exception. If `False`, Kuzu silently replays as far as possible.
+</ParamField>
+
+<ParamField path="enable_checksums" type="bool" default="True">
+  Use checksums to detect WAL file corruption.
+</ParamField>
+
+### In-memory databases
+
+Pass `None`, `""`, or `":memory:"` as the path to create a database that lives entirely in memory. The database is not persisted and is destroyed when the `Database` object is garbage-collected.
+
+```python
+# All three are equivalent
+db = kuzu.Database()
+db = kuzu.Database(None)
+db = kuzu.Database(":memory:")
+```
+
+### Static methods
+
+```python
+kuzu.Database.get_version() -> str
+kuzu.Database.get_storage_version() -> int
+```
+
+### Context manager
+
+`Database` implements the context manager protocol. The database is closed automatically when the `with` block exits.
+
+```python
+with kuzu.Database("./my_graph") as db:
+    conn = kuzu.Connection(db)
+    conn.execute("MATCH (n) RETURN count(n)")
+```
+
+### `close()`
+
+Explicitly releases the file lock on the database directory. Not required — Python's garbage collector will close the database when the object is no longer referenced.
+
+---
+
+## Connection
+
+`kuzu.Connection` is the object you use to execute queries. Each connection is thread-safe. Multiple connections can share the same `Database` instance.
+
+```python
+class Connection(database: Database, num_threads: int = 0)
+```
+
+<ParamField path="database" type="Database">
+  The `Database` instance to connect to.
+</ParamField>
+
+<ParamField path="num_threads" type="int" default="0">
+  Maximum number of threads this connection may use when executing a query. Defaults to the database-level limit.
+</ParamField>
+
+### `execute()`
+
+```python
+conn.execute(
+    query: str | PreparedStatement,
+    parameters: dict[str, Any] | None = None,
+) -> QueryResult | list[QueryResult]
+```
+
+Executes a Cypher query string or a previously prepared `PreparedStatement`. When the query contains multiple statements separated by semicolons, a `list[QueryResult]` is returned; otherwise a single `QueryResult` is returned.
+
+```python
+# Simple query
+result = conn.execute("MATCH (p:Person) RETURN p.name, p.age")
+
+# Parameterised query
+result = conn.execute(
+    "MATCH (p:Person) WHERE p.age > $min_age RETURN p.name",
+    parameters={"min_age": 28},
+)
+
+# Multiple statements
+results = conn.execute(
+    "CREATE (:Person {name: 'Carol', age: 22}); "
+    "MATCH (p:Person) RETURN count(p)"
+)
+```
+
+### `set_max_threads_for_exec()`
+
+```python
+conn.set_max_threads_for_exec(num_threads: int) -> None
+```
+
+Overrides the thread limit for subsequent queries on this connection.
+
+### `set_query_timeout()`
+
+```python
+conn.set_query_timeout(timeout_in_ms: int) -> None
+```
+
+Aborts any query that runs longer than `timeout_in_ms` milliseconds. A value of `0` (the default) disables the timeout.
+
+### `interrupt()`
+
+```python
+conn.interrupt() -> None
+```
+
+Immediately cancels the query currently executing on this connection. If no query is running this is a no-op.
+
+### Context manager
+
+```python
+with kuzu.Connection(db) as conn:
+    result = conn.execute("MATCH (n) RETURN n")
+```
+
+---
+
+## QueryResult
+
+`QueryResult` is returned by `Connection.execute()`. It provides row-by-row iteration as well as bulk conversion to pandas, PyArrow, and Polars.
+
+### Row iteration
+
+```python
+result = conn.execute("MATCH (p:Person) RETURN p.name, p.age")
+
+# Option 1 — has_next / get_next
+while result.has_next():
+    row = result.get_next()   # list[Any]
+    print(row)
+
+# Option 2 — Python iterator
+for row in result:
+    print(row)
+
+# Option 3 — dict rows
+for row in result.rows_as_dict():
+    print(row["p.name"], row["p.age"])
+```
+
+<AccordionGroup>
+  <Accordion title="has_next() → bool">
+    Returns `True` if there are more rows to read.
+  </Accordion>
+
+  <Accordion title="get_next() → list[Any] | dict[str, Any]">
+    Returns the next row as a list. If `rows_as_dict()` was called, returns a dict keyed by column name.
+  </Accordion>
+
+  <Accordion title="get_all() → list">
+    Consumes and returns all remaining rows.
+  </Accordion>
+
+  <Accordion title="get_n(count: int) → list">
+    Consumes and returns up to `count` rows.
+  </Accordion>
+
+  <Accordion title="reset_iterator() → None">
+    Rewinds the cursor to the beginning of the result set.
+  </Accordion>
+
+  <Accordion title="rows_as_dict(state: bool = True) → self">
+    Switches row format between `list` (default) and `dict`. Returns `self` for chaining.
+  </Accordion>
+</AccordionGroup>
+
+### Schema inspection
+
+```python
+result.get_column_names()       # list[str]
+result.get_column_data_types()  # list[str]
+result.get_schema()             # dict[str, str]
+result.get_num_tuples()         # int
+```
+
+### Dataframe export
+
+<Tabs>
+  <Tab title="pandas">
+    ```python
+    df = result.get_as_df()   # pandas.DataFrame
+    ```
+  </Tab>
+  <Tab title="Polars">
+    ```python
+    df = result.get_as_pl()   # polars.DataFrame
+    ```
+  </Tab>
+  <Tab title="PyArrow">
+    ```python
+    table = result.get_as_arrow()             # pyarrow.Table (adaptive chunk size)
+    table = result.get_as_arrow(chunk_size=1000)  # fixed chunk size
+    table = result.get_as_arrow(chunk_size=-1)    # single chunk
+    ```
+  </Tab>
+  <Tab title="NetworkX">
+    ```python
+    # Returns a networkx.MultiDiGraph (or MultiGraph if directed=False)
+    G = result.get_as_networkx(directed=True)
+    ```
+  </Tab>
+</Tabs>
+
+### Performance timing
+
+```python
+result.get_compiling_time()   # float — compile time in ms
+result.get_execution_time()   # float — execution time in ms
+```
+
+### Context manager
+
+```python
+with conn.execute("MATCH (p:Person) RETURN p") as result:
+    df = result.get_as_df()
+```
+
+---
+
+## User-defined functions (UDFs)
+
+Register a Python callable as a Cypher function using `Connection.create_function()`.
+
+```python
+conn.create_function(
+    name: str,
+    udf: Callable,
+    params_type: list[kuzu.Type | str] | None = None,
+    return_type: kuzu.Type | str = "",
+    *,
+    default_null_handling: bool = True,
+    catch_exceptions: bool = False,
+) -> None
+```
+
+<ParamField path="name" type="str">
+  The name used to call the function in Cypher queries.
+</ParamField>
+
+<ParamField path="udf" type="Callable">
+  The Python function to execute.
+</ParamField>
+
+<ParamField path="params_type" type="list[kuzu.Type | str] | None" default="None">
+  Parameter types as a list of `kuzu.Type` enum values or type-name strings (e.g. `"INT64"`, `"STRING"`).
+</ParamField>
+
+<ParamField path="return_type" type="kuzu.Type | str" default='""'>
+  Return type as a `kuzu.Type` or type-name string.
+</ParamField>
+
+<ParamField path="default_null_handling" type="bool" default="True">
+  When `True`, any `NULL` input short-circuits the function and returns `NULL` without calling the Python callable.
+</ParamField>
+
+<ParamField path="catch_exceptions" type="bool" default="False">
+  When `True`, unhandled Python exceptions return `NULL` instead of propagating.
+</ParamField>
+
+```python
+from kuzu import Type
+
+def double(x: int) -> int:
+    return x * 2
+
+conn.create_function(
+    "double",
+    double,
+    params_type=[Type.INT64],
+    return_type=Type.INT64,
+)
+
+result = conn.execute("MATCH (p:Person) RETURN double(p.age)")
+```
+
+Remove a registered function:
+
+```python
+conn.remove_function("double")
+```
+
+### `kuzu.Type` enum
+
+```
+ANY, NODE, REL, RECURSIVE_REL, SERIAL, BOOL,
+INT8, INT16, INT32, INT64, INT128,
+UINT8, UINT16, UINT32, UINT64,
+FLOAT, DOUBLE,
+DATE, TIMESTAMP, TIMESTAMP_TZ, TIMESTAMP_NS, TIMESTAMP_MS, TIMESTAMP_SEC,
+INTERVAL, INTERNAL_ID, STRING, BLOB, UUID,
+LIST, ARRAY, STRUCT, MAP, UNION
+```
+
+<Note>
+  The `TIMESTAMP_TZ` enum member is spelled `TIMSTAMP_TZ` in the source (a typo) but its string value `"TIMESTAMP_TZ"` is correct and can be used as a string parameter to `create_function()`.
+</Note>
+
+---
+
+## Async API
+
+`AsyncConnection` wraps a pool of `Connection` objects and a `ThreadPoolExecutor` to run queries without blocking the event loop.
+
+```python
+import asyncio
+import kuzu
+from kuzu import AsyncConnection
+
+async def main():
+    db = kuzu.Database("./my_graph")
+    with AsyncConnection(db, max_concurrent_queries=4) as conn:
+        result = await conn.execute("MATCH (p:Person) RETURN p.name")
+        df = result.get_as_df()
+        print(df)
+
+asyncio.run(main())
+```
+
+```python
+class AsyncConnection(
+    database: Database,
+    max_concurrent_queries: int = 4,
+    max_threads_per_query: int = 0,
+)
+```
+
+<ParamField path="max_concurrent_queries" type="int" default="4">
+  Number of underlying `Connection` objects in the pool; also sets the thread pool size.
+</ParamField>
+
+<ParamField path="max_threads_per_query" type="int" default="0">
+  Thread limit per individual query. `0` means no limit.
+</ParamField>
+
+`AsyncConnection.execute()` is a coroutine with the same signature as `Connection.execute()`. Cancelling the task calls `interrupt()` on the underlying connection automatically.
+
+---
+
+## PyTorch Geometric integration
+
+Use Kuzu as a remote backend for [PyTorch Geometric](https://pytorch-geometric.readthedocs.io/en/latest/advanced/remote.html) to feed graph data directly into a GNN training loop without copying the full graph into memory.
+
+```python
+feature_store, graph_store = db.get_torch_geometric_remote_backend(num_threads=4)
+```
+
+<ParamField path="num_threads" type="int | None" default="None">
+  Number of threads for data loading. Defaults to the number of CPU cores.
+</ParamField>
+
+The returned `(KuzuFeatureStore, KuzuGraphStore)` pair can be passed directly to any PyG data loader.
+
+```python
+from torch_geometric.loader import NeighborLoader
+
+feature_store, graph_store = db.get_torch_geometric_remote_backend()
+
+loader = NeighborLoader(
+    data=(feature_store, graph_store),
+    num_neighbors={("Paper", "cites", "Paper"): [12, 12]},
+    batch_size=64,
+    input_nodes=("Paper", input_nodes),
+    num_workers=4,
+    filter_per_worker=False,  # required — the database is not fork-safe
+)
+```
+
+<Warning>
+  The database instance is not fork-safe. When using multiple data-loader workers, always set `filter_per_worker=False`.
+</Warning>
+
+<Note>
+  The remote backend is currently read-only and does not support edge features. Node IDs are internal offsets, so avoid deleting nodes after building your training pipeline.
+</Note>
+
+---
+
+## Full example
+
+```python
+import kuzu
+
+# Open (or create) a persistent database
+db = kuzu.Database("./social_graph")
+conn = kuzu.Connection(db)
+
+# Define schema
+conn.execute("""
+    CREATE NODE TABLE Person(
+        name STRING,
+        age  INT64,
+        PRIMARY KEY(name)
+    )
+""")
+conn.execute("""
+    CREATE REL TABLE Knows(FROM Person TO Person, since INT64)
+""")
+
+# Insert data
+conn.execute("CREATE (:Person {name: 'Alice', age: 30})")
+conn.execute("CREATE (:Person {name: 'Bob',   age: 25})")
+conn.execute("""
+    MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'})
+    CREATE (a)-[:Knows {since: 2020}]->(b)
+""")
+
+# Query with parameters
+result = conn.execute(
+    "MATCH (a:Person)-[:Knows]->(b:Person) WHERE a.name = $name RETURN b.name, b.age",
+    parameters={"name": "Alice"},
+)
+
+# Export to pandas
+df = result.get_as_df()
+print(df)
+```

@@ -1,0 +1,296 @@
+---
+title: 'Performance tuning'
+description: 'Optimize Kuzu query performance through buffer pool sizing, bulk loading, query profiling, thread configuration, and storage best practices.'
+keywords: ['performance', 'tuning', 'buffer pool', 'bulk loading', 'COPY FROM', 'EXPLAIN', 'PROFILE', 'threads', 'compression', 'index', 'checkpoint']
+---
+
+Kuzu is designed for high-performance analytical graph queries. This page covers the most impactful levers for improving throughput and reducing latency.
+
+---
+
+## Buffer pool sizing
+
+The buffer pool is the single most impactful configuration parameter. It caches database pages in memory, reducing disk reads. If your working set fits in the buffer pool, repeated queries are served entirely from RAM.
+
+<Tip>
+  Start with 60–80% of available RAM for dedicated workloads. Reduce this if the process shares memory with other services.
+</Tip>
+
+```python
+import kuzu
+
+# 8 GB buffer pool for a machine with 16 GB RAM
+db = kuzu.Database("/path/to/mydb", buffer_pool_size=8 * 1024 ** 3)
+```
+
+Signs that the buffer pool is too small:
+
+- Queries that read large node or relationship tables are slow on repeat runs
+- Disk I/O stays high throughout a query workload
+- `PROFILE` output shows high page fetch counts relative to page hits in the buffer pool
+
+---
+
+## Thread configuration
+
+Kuzu parallelizes query execution across threads using a task-based scheduler. By default it uses all available CPU cores. Adjust this when:
+
+- You want to reserve CPU for other workloads running on the same host
+- You are running many concurrent connections and want to limit per-connection CPU usage
+- You are debugging a query and want single-threaded execution for reproducibility
+
+```python
+import kuzu
+
+# Limit to 8 threads at the database level
+db = kuzu.Database("/path/to/mydb", max_num_threads=8)
+
+# Override per connection
+conn = kuzu.Connection(db, num_threads=4)
+```
+
+You can also change the thread count for a session at runtime:
+
+```cypher
+CALL threads=4;
+```
+
+---
+
+## Bulk loading with COPY FROM
+
+For loading large datasets, `COPY FROM` is orders of magnitude faster than individual `CREATE` or `MERGE` statements. `COPY FROM` uses a bulk-loading path that bypasses per-row overhead and writes data directly to storage in batches.
+
+<Tabs>
+  <Tab title="CSV">
+    ```cypher
+    -- Create the table first
+    CREATE NODE TABLE Person (id INT64, name STRING, age INT64, PRIMARY KEY(id));
+
+    -- Load from CSV in bulk
+    COPY Person FROM '/data/persons.csv' (HEADER=true);
+    ```
+  </Tab>
+  <Tab title="Parquet">
+    ```cypher
+    CREATE NODE TABLE Person (id INT64, name STRING, age INT64, PRIMARY KEY(id));
+
+    COPY Person FROM '/data/persons.parquet';
+    ```
+  </Tab>
+  <Tab title="JSON">
+    ```cypher
+    CREATE REL TABLE Knows (FROM Person TO Person, since INT64);
+
+    COPY Knows FROM '/data/knows.jsonl';
+    ```
+  </Tab>
+</Tabs>
+
+<Warning>
+  Do not use `COPY FROM` and individual `CREATE` statements interchangeably during initial data loading. `COPY FROM` is designed for loading into empty or partially populated tables. For incremental inserts after the initial load, use `CREATE` or `MERGE`.
+</Warning>
+
+### Why COPY FROM is faster
+
+Individual `CREATE` statements pay the cost of transaction management, WAL logging, and index maintenance per row. `COPY FROM` amortizes these costs across large batches and uses a sequential write pattern that is much more cache-friendly.
+
+---
+
+## Query profiling with EXPLAIN and PROFILE
+
+Use `EXPLAIN` to inspect the query plan without executing the query, and `PROFILE` to execute the query and collect runtime statistics.
+
+### EXPLAIN
+
+```cypher
+EXPLAIN MATCH (a:Person)-[:Knows]->(b:Person) WHERE a.id = 1 RETURN b.name;
+```
+
+`EXPLAIN` returns the physical query plan: which operators Kuzu will use (scan, hash join, hash aggregate, etc.) and in what order.
+
+### PROFILE
+
+```cypher
+PROFILE MATCH (a:Person)-[:Knows]->(b:Person) WHERE a.id = 1 RETURN b.name;
+```
+
+`PROFILE` executes the query and annotates each operator in the plan with:
+
+- Number of output tuples
+- Execution time
+
+Use this to identify operators that produce unexpectedly large intermediate results, which often indicates a missing index, a poor join order, or a filter that could be pushed down.
+
+---
+
+## Index usage and primary keys
+
+Kuzu automatically creates a hash index on the primary key of every node table. Point lookups by primary key use this index and are O(1) with respect to table size.
+
+```cypher
+-- Fast: primary key lookup uses the hash index
+MATCH (p:Person {id: 42}) RETURN p.name;
+
+-- Slower: full scan, no index on 'name'
+MATCH (p:Person {name: "Alice"}) RETURN p.id;
+```
+
+<AccordionGroup>
+  <Accordion title="Choosing primary keys">
+    Choose primary key columns with high cardinality and values you will filter on frequently. The primary key index is the only built-in secondary index in Kuzu. For workloads that require fast lookups on non-primary columns, consider restructuring your schema or filtering on primary keys joined to secondary tables.
+  </Accordion>
+  <Accordion title="Primary keys in COPY FROM">
+    During `COPY FROM`, Kuzu builds the primary key index in bulk as part of the load. This is much faster than incrementally updating the index one row at a time via `CREATE`.
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Compression
+
+Compression is enabled by default. It reduces on-disk storage and can improve read throughput when storage bandwidth is the bottleneck (common on spinning disks and network-attached storage).
+
+```python
+import kuzu
+
+# Disable compression on fast NVMe when CPU is more constrained than I/O
+db = kuzu.Database("/path/to/mydb", compression=False)
+```
+
+Compression is set at database creation time and cannot be changed without re-creating the database. Use the default (`True`) unless profiling shows that decompression is a bottleneck in your specific workload.
+
+---
+
+## In-memory databases for temporary workloads
+
+For data transformation pipelines, test fixtures, or any workload where data does not need to persist, an in-memory database eliminates all disk I/O entirely.
+
+```python
+import kuzu
+
+db = kuzu.Database()  # in-memory
+conn = kuzu.Connection(db)
+
+conn.execute("CREATE NODE TABLE Record (id INT64, value DOUBLE, PRIMARY KEY(id))")
+# Load, transform, query — all in RAM
+```
+
+In-memory databases also skip WAL logging and checkpointing, which further reduces overhead.
+
+---
+
+## Columnar storage and analytical queries
+
+Kuzu stores node and relationship properties in a **columnar** format. Each property is stored separately, in compressed column chunks. This has important implications for query performance:
+
+- **Projection pushdown**: If a query reads only `name` from a `Person` table, Kuzu reads only the `name` column, not all properties. Avoid `RETURN *` in production queries if you only need a subset of properties.
+- **Filter pushdown with zone maps**: Kuzu maintains per-chunk min/max statistics (zone maps) for numeric and string columns. Chunks whose range cannot contain a matching value are skipped entirely without decompression.
+- **Aggregation performance**: Column-at-a-time execution is highly cache-efficient for aggregations like `count`, `sum`, and `avg`.
+
+---
+
+## CSR adjacency indices for graph traversal
+
+Relationship tables are stored using **Compressed Sparse Row (CSR)** adjacency lists. CSR provides:
+
+- O(1) access to the start of a node's neighbor list
+- Sequential memory access when iterating neighbors — highly cache-friendly
+- Efficient variable-length pattern matching (`[:Rel*1..5]`) using recursive expansion over CSR lists
+
+The CSR index is built during `COPY FROM` or the first checkpoint after a write transaction that adds relationships. Traversal queries on large graphs benefit most from ensuring the buffer pool is large enough to cache the adjacency lists.
+
+---
+
+## Checkpoint frequency tuning
+
+Checkpointing compacts WAL records into the main storage files. Frequent checkpoints reduce recovery time after a crash; infrequent checkpoints reduce write amplification.
+
+```python
+import kuzu
+
+# Large threshold: fewer checkpoints, less overhead during heavy write workloads
+db = kuzu.Database(
+    "/path/to/mydb",
+    checkpoint_threshold=128 * 1024 * 1024,  # 128 MB
+)
+```
+
+You can also control checkpointing at runtime:
+
+```cypher
+-- Change threshold to 64 MB for the current session
+CALL checkpoint_threshold=67108864;
+
+-- Disable automatic checkpointing and checkpoint manually
+CALL auto_checkpoint=false;
+-- ... run writes ...
+CHECKPOINT;
+```
+
+For write-heavy batch jobs, consider disabling auto-checkpoint during the batch, running a manual `CHECKPOINT` at the end, and re-enabling auto-checkpoint afterward. This prevents checkpoint overhead from interrupting the batch.
+
+---
+
+## Read-only databases for parallel read workloads
+
+When multiple processes or services need to query the same database concurrently, open each instance in `read_only=True` mode. Kuzu allows unlimited simultaneous read-only connections to the same database path.
+
+```python
+import kuzu
+from multiprocessing import Pool
+
+def query_worker(db_path):
+    db = kuzu.Database(db_path, read_only=True)
+    conn = kuzu.Connection(db)
+    result = conn.execute("MATCH (p:Person) RETURN count(p)")
+    return result.get_next()[0]
+
+with Pool(8) as pool:
+    counts = pool.map(query_worker, ["/path/to/mydb"] * 8)
+```
+
+<Note>
+  You cannot open a read-only instance and a read-write instance on the same path at the same time. Coordinate writes through a single read-write process and scale reads with multiple read-only processes.
+</Note>
+
+---
+
+## Spill to disk
+
+For queries that materialize large intermediate results (for example, large hash joins or sorts), Kuzu can spill intermediate state to disk rather than running out of memory. Spill to disk is enabled by default for persistent databases.
+
+```cypher
+-- Disable spill to disk (only if memory is always sufficient)
+CALL spill_to_disk=false;
+```
+
+Spill to disk trades query latency for robustness. If memory is consistently sufficient for your workloads, disabling it removes the overhead of managing the spill file. If queries are already fast with spill enabled, leave the default.
+
+<Warning>
+  Spill to disk cannot be enabled for in-memory databases or read-only databases.
+</Warning>
+
+---
+
+## Performance checklist
+
+<AccordionGroup>
+  <Accordion title="Data loading">
+    - Use `COPY FROM` for initial bulk loads, not individual `CREATE` statements
+    - Load node tables before relationship tables to avoid index lookups during relationship creation
+    - After bulk loading, run `CHECKPOINT` to compact the WAL
+  </Accordion>
+  <Accordion title="Query writing">
+    - Filter on primary key columns to use the hash index
+    - Avoid `RETURN *`; project only the columns you need
+    - Use `PROFILE` to identify operators with unexpectedly large output cardinality
+    - Add selectivity filters early in the `MATCH` pattern
+  </Accordion>
+  <Accordion title="Configuration">
+    - Set `buffer_pool_size` to 60–80% of available RAM
+    - Set `max_num_threads` to the number of cores you want Kuzu to use
+    - Use in-memory databases for throwaway or test workloads
+    - Use `read_only=True` for processes that only read
+  </Accordion>
+</AccordionGroup>

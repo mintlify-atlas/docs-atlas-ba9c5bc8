@@ -1,0 +1,482 @@
+---
+title: "Data definition (DDL)"
+description: "Full reference for Kuzu DDL statements: CREATE NODE TABLE, CREATE REL TABLE, DROP, ALTER, COPY FROM/TO, and catalog inspection."
+---
+
+Kuzu's schema is defined using DDL (Data Definition Language) statements. Tables are either **node tables** or **relationship (rel) tables**. Every DDL statement auto-commits unless wrapped in an explicit transaction.
+
+<Note>
+All DDL changes take effect immediately. There is no `ROLLBACK` for DDL statements that have already been committed.
+</Note>
+
+---
+
+## Data types
+
+The following types are available for column definitions:
+
+| Category | Types |
+|---|---|
+| Integer | `INT8`, `INT16`, `INT32`, `INT64`, `INT128`, `UINT8`, `UINT16`, `UINT32`, `UINT64`, `UINT128` |
+| Floating-point | `FLOAT`, `DOUBLE`, `DECIMAL(p, s)` |
+| Text | `STRING` |
+| Boolean | `BOOLEAN` |
+| Date/time | `DATE`, `TIMESTAMP`, `TIMESTAMP_NS`, `TIMESTAMP_MS`, `TIMESTAMP_SEC`, `TIMESTAMP_TZ`, `INTERVAL` |
+| Binary | `BLOB` |
+| Unique identifier | `UUID` |
+| Collections | `type[]` (list), `type[n]` (fixed-size array), `MAP(keyType, valType)` |
+| Composite | `STRUCT(field1 type1, field2 type2, ...)`, `UNION(field1 type1, ...)` |
+| Serial | `SERIAL` (auto-incrementing INT64) |
+
+---
+
+## CREATE NODE TABLE
+
+Defines a node table with a required primary key.
+
+```
+CREATE NODE TABLE [IF NOT EXISTS] TableName (
+  property1 DataType [DEFAULT expr] [PRIMARY KEY],
+  property2 DataType [DEFAULT expr],
+  ...
+  [PRIMARY KEY (propertyName)]
+)
+```
+
+<AccordionGroup>
+  <Accordion title="Basic example">
+    ```cypher
+    CREATE NODE TABLE User (
+      name   STRING,
+      age    INT64,
+      PRIMARY KEY (name)
+    )
+    ```
+  </Accordion>
+
+  <Accordion title="With DEFAULT values">
+    ```cypher
+    CREATE NODE TABLE Product (
+      id       INT64  PRIMARY KEY,
+      name     STRING,
+      price    DOUBLE DEFAULT 0.0,
+      inStock  BOOLEAN DEFAULT true
+    )
+    ```
+  </Accordion>
+
+  <Accordion title="With complex types">
+    ```cypher
+    CREATE NODE TABLE Person (
+      id        INT64 PRIMARY KEY,
+      name      STRING,
+      tags      STRING[],
+      scores    INT32[],
+      address   STRUCT(street STRING, city STRING, zip STRING),
+      metadata  MAP(STRING, STRING)
+    )
+    ```
+  </Accordion>
+
+  <Accordion title="IF NOT EXISTS">
+    Silently skips creation if the table already exists:
+
+    ```cypher
+    CREATE NODE TABLE IF NOT EXISTS User (
+      name STRING PRIMARY KEY,
+      age  INT64
+    )
+    ```
+  </Accordion>
+</AccordionGroup>
+
+<Note>
+Every node table must have exactly one `PRIMARY KEY`. Primary key values must be unique and non-null.
+</Note>
+
+---
+
+## CREATE REL TABLE
+
+Defines a relationship table connecting source and destination node tables.
+
+```
+CREATE REL TABLE [GROUP] [IF NOT EXISTS] TableName (
+  FROM SourceTable TO DestTable
+  [, FROM SourceTable2 TO DestTable2 ...]
+  [, property1 DataType [DEFAULT expr] ...]
+  [, MANY_MANY | MANY_ONE | ONE_MANY | ONE_ONE]
+)
+[WITH (storage_direction = 'fwd' | 'bwd' | 'both')]
+```
+
+<AccordionGroup>
+  <Accordion title="Simple relationship">
+    ```cypher
+    CREATE REL TABLE Follows (
+      FROM User TO User,
+      since INT64
+    )
+    ```
+  </Accordion>
+
+  <Accordion title="Multiple source/destination pairs (REL TABLE GROUP)">
+    A single relationship type can connect different node table pairs:
+
+    ```cypher
+    CREATE REL TABLE likes (
+      FROM User TO User,
+      FROM User TO Product,
+      since INT64
+    )
+    ```
+  </Accordion>
+
+  <Accordion title="Cardinality constraint">
+    Kuzu supports optional cardinality hints: `MANY_MANY` (default), `MANY_ONE`, `ONE_MANY`, `ONE_ONE`.
+
+    ```cypher
+    CREATE REL TABLE LivesIn (
+      FROM User TO City,
+      MANY_ONE
+    )
+    ```
+  </Accordion>
+
+  <Accordion title="Storage direction">
+    Control which direction indexes are built for faster traversal:
+
+    ```cypher
+    CREATE REL TABLE Follows (
+      FROM User TO User,
+      since INT64
+    ) WITH (storage_direction = 'fwd')
+    -- 'fwd' | 'bwd' | 'both' (default: 'fwd')
+    ```
+  </Accordion>
+
+  <Accordion title="IF NOT EXISTS">
+    ```cypher
+    CREATE REL TABLE IF NOT EXISTS Follows (
+      FROM User TO User,
+      since INT64
+    )
+    ```
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## DROP TABLE
+
+Removes a node or relationship table and all its data.
+
+```
+DROP TABLE [IF EXISTS] TableName
+```
+
+```cypher
+DROP TABLE Follows
+DROP TABLE IF EXISTS TempTable
+```
+
+<Warning>
+Dropping a node table does **not** automatically drop relationship tables that reference it. Drop the relationship tables first, or use `DETACH DELETE` to remove nodes before dropping the table.
+</Warning>
+
+---
+
+## ALTER TABLE
+
+Modifies an existing node or relationship table's schema.
+
+<AccordionGroup>
+  <Accordion title="ADD COLUMN">
+    ```
+    ALTER TABLE TableName ADD [IF NOT EXISTS] columnName DataType [DEFAULT expr]
+    ```
+
+    ```cypher
+    -- Add a column with no default (existing rows get NULL)
+    ALTER TABLE User ADD email STRING
+
+    -- Add a column with a default value
+    ALTER TABLE User ADD score DOUBLE DEFAULT 0.0
+
+    -- Skip if column already exists
+    ALTER TABLE User ADD IF NOT EXISTS score DOUBLE DEFAULT 0.0
+    ```
+  </Accordion>
+
+  <Accordion title="DROP COLUMN">
+    ```
+    ALTER TABLE TableName DROP [IF EXISTS] columnName
+    ```
+
+    ```cypher
+    ALTER TABLE User DROP email
+    ALTER TABLE User DROP IF EXISTS email
+    ```
+  </Accordion>
+
+  <Accordion title="RENAME COLUMN">
+    ```
+    ALTER TABLE TableName RENAME oldName TO newName
+    ```
+
+    ```cypher
+    ALTER TABLE User RENAME email TO emailAddress
+    ```
+  </Accordion>
+
+  <Accordion title="RENAME TABLE">
+    ```
+    ALTER TABLE OldName RENAME TO NewName
+    ```
+
+    ```cypher
+    ALTER TABLE User RENAME TO AppUser
+    ```
+  </Accordion>
+
+  <Accordion title="ADD FROM-TO connection (rel tables)">
+    Add a new source/destination pair to an existing relationship table:
+
+    ```
+    ALTER TABLE RelTable ADD [IF NOT EXISTS] FROM SrcTable TO DstTable
+    ```
+
+    ```cypher
+    ALTER TABLE likes ADD FROM User TO Organisation
+    ```
+  </Accordion>
+
+  <Accordion title="DROP FROM-TO connection (rel tables)">
+    ```
+    ALTER TABLE RelTable DROP [IF EXISTS] FROM SrcTable TO DstTable
+    ```
+
+    ```cypher
+    ALTER TABLE likes DROP FROM User TO Organisation
+    ```
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## COPY FROM
+
+Bulk-loads data into a node or relationship table from an external file.
+
+```
+COPY TableName [(col1, col2, ...)] FROM source [(options)]
+```
+
+Supported source formats: **CSV**, **Parquet**, **JSON**, **NPY**, **glob patterns**, and **query results**.
+
+<AccordionGroup>
+  <Accordion title="CSV">
+    ```cypher
+    -- Single file
+    COPY User FROM 'data/users.csv'
+
+    -- With options
+    COPY User FROM 'data/users.csv' (HEADER=true, DELIM='|', QUOTE='"')
+
+    -- Multiple files (glob)
+    COPY User FROM GLOB('data/users_*.csv')
+
+    -- Explicit column mapping
+    COPY User (name, age) FROM 'data/users.csv'
+    ```
+
+    Common CSV options:
+
+    | Option | Default | Description |
+    |---|---|---|
+    | `HEADER` | `false` | Whether the first row is a header |
+    | `DELIM` | `,` | Column delimiter |
+    | `QUOTE` | `"` | Quote character |
+    | `ESCAPE` | `\` | Escape character |
+    | `NULLSTR` | `` | String representing NULL |
+  </Accordion>
+
+  <Accordion title="Parquet">
+    ```cypher
+    COPY User FROM 'data/users.parquet'
+    COPY User FROM GLOB('data/users_*.parquet')
+    ```
+  </Accordion>
+
+  <Accordion title="JSON">
+    ```cypher
+    COPY User FROM 'data/users.json'
+    COPY User FROM 'data/users.ndjson'   -- newline-delimited JSON
+    ```
+  </Accordion>
+
+  <Accordion title="NPY (NumPy arrays)">
+    Load columnar data from NumPy `.npy` files using `BY COLUMN`:
+
+    ```cypher
+    COPY Embeddings FROM ('ids.npy', 'vectors.npy') BY COLUMN
+    ```
+  </Accordion>
+
+  <Accordion title="From a query result">
+    ```cypher
+    COPY City FROM (
+      LOAD FROM 'data/raw.csv' (HEADER=true)
+      WHERE column1 <> ''
+      RETURN column1 AS name, toInteger(column2) AS population
+    )
+    ```
+  </Accordion>
+
+  <Accordion title="From a list of files">
+    ```cypher
+    COPY Follows FROM ['data/follows_1.csv', 'data/follows_2.csv']
+    ```
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## COPY TO
+
+Exports the result of a query to a file.
+
+```
+COPY (query) TO 'path' [(options)]
+```
+
+<AccordionGroup>
+  <Accordion title="Export to CSV">
+    ```cypher
+    COPY (MATCH (u:User) RETURN u.name, u.age)
+    TO 'output/users.csv' (HEADER=true)
+    ```
+  </Accordion>
+
+  <Accordion title="Export to Parquet">
+    ```cypher
+    COPY (MATCH (u:User)-[:LivesIn]->(c:City) RETURN u.name, c.name)
+    TO 'output/user_cities.parquet'
+    ```
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## LOAD FROM
+
+Scans an external file as a streaming table in a read query (without inserting data).
+
+```
+LOAD [WITH HEADERS (col1 type1, ...)] FROM source [(options)] [WHERE ...]
+```
+
+```cypher
+-- Infer schema from CSV header row
+LOAD FROM 'data/users.csv' (HEADER=true)
+RETURN *
+
+-- Override column names and types
+LOAD WITH HEADERS (name STRING, age INT64)
+FROM 'data/users.csv'
+WHERE age > 30
+RETURN name, age
+```
+
+<Tip>
+`LOAD FROM` is useful for previewing files or transforming data before inserting it with `COPY FROM` or `CREATE`.
+</Tip>
+
+---
+
+## CREATE SEQUENCE
+
+Creates an auto-incrementing integer sequence.
+
+```
+CREATE SEQUENCE [IF NOT EXISTS] SeqName
+  [INCREMENT [BY] n]
+  [MINVALUE n | NO MINVALUE]
+  [MAXVALUE n | NO MAXVALUE]
+  [START [WITH] n]
+  [CYCLE | NO CYCLE]
+```
+
+```cypher
+CREATE SEQUENCE user_id_seq START WITH 1 INCREMENT BY 1
+```
+
+Use the sequence as a default value:
+
+```cypher
+CREATE NODE TABLE User (
+  id   INT64 DEFAULT nextval('user_id_seq') PRIMARY KEY,
+  name STRING
+)
+```
+
+---
+
+## DROP SEQUENCE / DROP MACRO
+
+```cypher
+DROP SEQUENCE [IF EXISTS] SeqName
+DROP MACRO [IF EXISTS] MacroName
+```
+
+---
+
+## Catalog inspection
+
+<AccordionGroup>
+  <Accordion title="SHOW TABLES — list all tables">
+    ```cypher
+    CALL show_tables() RETURN *
+    ```
+
+    Returns: `name`, `type` (`NODE` or `REL`), `comment`.
+  </Accordion>
+
+  <Accordion title="table_info() — describe a table's schema">
+    ```cypher
+    CALL table_info('User') RETURN *
+    ```
+
+    Returns: `property_id`, `name`, `type`, `default`, `primary_key`.
+  </Accordion>
+
+  <Accordion title="show_connection() — list rel table connections">
+    ```cypher
+    CALL show_connection('Follows') RETURN *
+    ```
+
+    Returns: `source_table_name`, `destination_table_name`.
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Full demo schema
+
+The examples throughout this documentation use the following demo schema:
+
+```cypher
+CREATE NODE TABLE User (name STRING, age INT64, PRIMARY KEY (name));
+CREATE NODE TABLE City (name STRING, population INT64, PRIMARY KEY (name));
+CREATE REL TABLE Follows (FROM User TO User, since INT64);
+CREATE REL TABLE LivesIn (FROM User TO City);
+```
+
+Load data:
+
+```cypher
+COPY User    FROM 'dataset/demo-db/csv/user.csv';
+COPY City    FROM 'dataset/demo-db/csv/city.csv';
+COPY Follows FROM 'dataset/demo-db/csv/follows.csv';
+COPY LivesIn FROM 'dataset/demo-db/csv/lives-in.csv';
+```

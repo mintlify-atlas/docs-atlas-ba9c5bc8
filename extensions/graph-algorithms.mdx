@@ -1,0 +1,435 @@
+---
+title: "Graph algorithms"
+description: "Run built-in graph algorithms — PageRank, connected components, community detection, k-core decomposition, and spanning forest — using the algo extension."
+keywords: ["graph algorithms", "PageRank", "weakly connected components", "strongly connected components", "Louvain", "k-core", "spanning forest", "algo", "GDS", "project_graph"]
+---
+
+The `algo` extension provides a set of graph data science algorithms that operate on projected subgraphs. Algorithms are invoked with `CALL` and return per-node or per-edge results that can be further processed with standard Cypher clauses.
+
+<Note>
+The `algo` extension is pre-installed in Kuzu v0.11.3 and later. You only need to load it — no separate installation step is required.
+</Note>
+
+## Loading the extension
+
+```cypher
+LOAD EXTENSION algo;
+```
+
+For versions before v0.11.3, install from a repository first:
+
+```cypher
+INSTALL algo FROM 'http://localhost:8080/';
+LOAD EXTENSION algo;
+```
+
+## Projected graphs
+
+All algorithms operate on a **projected graph** — a named, in-memory view of a subset of node and relationship tables. You create one with `project_graph` before running any algorithm, and optionally drop it when done.
+
+### Projecting all nodes and relationships of given types
+
+```cypher
+CALL project_graph('MyGraph', ['Person'], ['Knows']);
+```
+
+### Projecting with filters
+
+Pass a map instead of a list to apply per-table predicate filters:
+
+```cypher
+CALL project_graph(
+    'FilteredGraph',
+    {'Person': 'n.age > 18'},
+    {'Knows': 'r.weight > 0.5'}
+);
+```
+
+You can mix filtered and unfiltered tables:
+
+```cypher
+CALL project_graph(
+    'G',
+    {'Person': 'n.ID < 10', 'Organisation': ''},
+    ['Knows', 'WorksAt']
+);
+```
+
+### Dropping a projected graph
+
+```cypher
+CALL drop_projected_graph('MyGraph');
+```
+
+---
+
+## Algorithms
+
+<AccordionGroup>
+  <Accordion title="PageRank (page_rank / pr)">
+    Assigns an importance score to each node based on the number and quality of incoming links. The score converges iteratively using the standard damping-factor formula.
+
+    **Syntax**
+
+    ```cypher
+    CALL page_rank('<graph_name>')
+    RETURN node.<property>, rank
+    ORDER BY rank DESC;
+    ```
+
+    **Alias:** `pr`
+
+    **Output columns**
+
+    | Column | Type   | Description |
+    |--------|--------|-------------|
+    | `node` | NODE   | The node. |
+    | `rank` | DOUBLE | Computed PageRank score. |
+
+    **Optional parameters**
+
+    | Parameter         | Type   | Default | Description |
+    |-------------------|--------|---------|-------------|
+    | `dampingFactor`   | DOUBLE | `0.85`  | Probability of following an outgoing edge at each step. Must be in `[0, 1)`. |
+    | `maxIterations`   | INT64  | `20`    | Maximum number of iterations. Must be a positive integer. |
+    | `tolerance`       | DOUBLE | `1e-7`  | Convergence threshold. Iteration stops when the total rank change falls below this value. |
+    | `normalizeInitial`| BOOL   | `true`  | When `true`, initial rank is `1/|V|`. When `false`, initial rank is `1`. |
+
+    **Example**
+
+    ```cypher
+    CALL project_graph('G', ['Person'], ['Knows']);
+
+    -- Default settings
+    CALL page_rank('G')
+    RETURN node.name, rank
+    ORDER BY rank DESC;
+
+    -- Custom damping factor and iteration limit
+    CALL page_rank('G', dampingFactor := 0.5, maxIterations := 10)
+    RETURN node.name, rank
+    ORDER BY rank DESC;
+    ```
+
+    **Direction:** PageRank runs on directed graphs. Edges are traversed in the backward direction (incoming links raise a node's rank).
+  </Accordion>
+
+  <Accordion title="Weakly connected components (weakly_connected_components / wcc)">
+    Partitions nodes into groups where every pair of nodes is connected by an undirected path. Directionality of edges is ignored.
+
+    **Syntax**
+
+    ```cypher
+    CALL weakly_connected_components('<graph_name>')
+    RETURN node.<property>, group_id;
+    ```
+
+    **Alias:** `wcc`
+
+    **Output columns**
+
+    | Column     | Type  | Description |
+    |------------|-------|-------------|
+    | `node`     | NODE  | The node. |
+    | `group_id` | INT64 | Identifier shared by all nodes in the same component. |
+
+    **Example**
+
+    ```cypher
+    CALL project_graph('G', ['Node'], ['Edge']);
+
+    CALL weakly_connected_components('G')
+    RETURN group_id, collect(node.id) AS members;
+    ```
+
+    ```
+    ┌──────────┬───────────────┐
+    │ group_id │ members       │
+    ├──────────┼───────────────┤
+    │ 0        │ [D]           │
+    │ 1        │ [I]           │
+    │ 2        │ [A, B, C]     │
+    │ 5        │ [E, F, G, H]  │
+    └──────────┴───────────────┘
+    ```
+
+    **Direction:** Undirected — edges are treated as bidirectional regardless of how they were stored.
+  </Accordion>
+
+  <Accordion title="Strongly connected components (strongly_connected_components / scc)">
+    Partitions nodes into maximal groups where every node is reachable from every other node by following directed edges.
+
+    Two implementations are available:
+
+    - `strongly_connected_components` (alias: `scc`) — default SCC implementation.
+    - `strongly_connected_components_kosaraju` (aliases: `scc_ko`) — Kosaraju's two-pass DFS algorithm.
+
+    Both produce identical results; choose based on the characteristics of your graph.
+
+    **Syntax**
+
+    ```cypher
+    CALL strongly_connected_components('<graph_name>')
+    RETURN node.<property>, group_id;
+
+    -- or with Kosaraju's algorithm
+    CALL strongly_connected_components_kosaraju('<graph_name>')
+    RETURN node.<property>, group_id;
+    ```
+
+    **Output columns**
+
+    | Column     | Type  | Description |
+    |------------|-------|-------------|
+    | `node`     | NODE  | The node. |
+    | `group_id` | INT64 | Identifier shared by all nodes in the same strongly connected component. |
+
+    **Example**
+
+    ```cypher
+    CALL project_graph('G', ['Node'], ['Edge']);
+
+    CALL strongly_connected_components('G')
+    WITH group_id, collect(node.id) AS members
+    RETURN group_id, members
+    ORDER BY group_id;
+    ```
+
+    ```
+    ┌──────────┬───────────────────┐
+    │ group_id │ members           │
+    ├──────────┼───────────────────┤
+    │ 0        │ [F, H, I]         │
+    │ 3        │ [A, B, D, E, G]   │
+    │ 8        │ [C]               │
+    └──────────┴───────────────────┘
+    ```
+
+    **Direction:** Directed — edge direction is respected.
+  </Accordion>
+
+  <Accordion title="Louvain community detection (louvain)">
+    Detects communities by greedily optimizing modularity. Nodes are assigned to the community that maximizes the gain in modularity at each pass. The algorithm is non-deterministic; results may vary between runs.
+
+    **Syntax**
+
+    ```cypher
+    CALL louvain('<graph_name>')
+    RETURN louvain_id, collect(node.<property>);
+    ```
+
+    **Output columns**
+
+    | Column       | Type  | Description |
+    |--------------|-------|-------------|
+    | `node`       | NODE  | The node. |
+    | `louvain_id` | INT64 | Community identifier assigned to this node. |
+
+    **Example**
+
+    ```cypher
+    CALL project_graph('G', ['Node'], ['Edge']);
+
+    CALL louvain('G')
+    RETURN louvain_id, collect(node.id) AS members;
+    ```
+
+    ```
+    ┌───────────┬──────────────────┐
+    │ louvain_id│ members          │
+    ├───────────┼──────────────────┤
+    │ 0         │ [A, B, C, D]     │
+    │ 1         │ [E, F, G, H]     │
+    └───────────┴──────────────────┘
+    ```
+
+    **Direction:** Treats the graph as undirected for modularity computation.
+
+    <Warning>
+    Louvain is non-deterministic. Community IDs and community membership may differ between runs on the same data.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="K-core decomposition (k_core_decomposition / kcore)">
+    Assigns each node a *core number* (k-degree): the largest integer `k` such that the node belongs to a subgraph where every node has at least `k` neighbors. Useful for identifying densely connected cores in a network.
+
+    **Syntax**
+
+    ```cypher
+    CALL k_core_decomposition('<graph_name>')
+    RETURN node.<property>, k_degree
+    ORDER BY k_degree DESC;
+    ```
+
+    **Alias:** `kcore`
+
+    **Output columns**
+
+    | Column     | Type  | Description |
+    |------------|-------|-------------|
+    | `node`     | NODE  | The node. |
+    | `k_degree` | INT64 | Core number of the node. |
+
+    **Example**
+
+    ```cypher
+    CALL project_graph('G', ['Node'], ['Edge']);
+
+    CALL k_core_decomposition('G')
+    RETURN node.id, k_degree
+    ORDER BY k_degree DESC;
+    ```
+
+    ```
+    ┌──────────┬──────────┐
+    │ node.id  │ k_degree │
+    ├──────────┼──────────┤
+    │ Doug     │ 3        │
+    │ Eli      │ 3        │
+    │ Filip    │ 3        │
+    │ Greg     │ 3        │
+    │ Charles  │ 1        │
+    │ Bridget  │ 1        │
+    │ Alice    │ 1        │
+    └──────────┴──────────┘
+    ```
+
+    **Direction:** Treats the graph as undirected (degree counts edges in both directions).
+  </Accordion>
+
+  <Accordion title="Spanning forest (spanning_forest / sf)">
+    Computes a spanning forest of the graph — a set of edges that connects all reachable nodes while minimizing (or maximizing) total edge weight and containing no cycles. For disconnected graphs, a separate spanning tree is produced for each connected component, yielding a forest.
+
+    **Syntax**
+
+    ```cypher
+    CALL spanning_forest('<graph_name>')
+    RETURN src.<property> AS src, dst.<property> AS dst, rel.<weight_col> AS weight, forest_id
+    ORDER BY forest_id;
+    ```
+
+    **Alias:** `sf`
+
+    **Output columns**
+
+    | Column      | Type  | Description |
+    |-------------|-------|-------------|
+    | `src`       | NODE  | Source node of the spanning tree edge. |
+    | `dst`       | NODE  | Destination node of the spanning tree edge. |
+    | `rel`       | REL   | The relationship used in the spanning edge. |
+    | `forest_id` | INT64 | Identifier of the component tree this edge belongs to. |
+
+    **Optional parameters**
+
+    | Parameter         | Type   | Default   | Description |
+    |-------------------|--------|-----------|-------------|
+    | `weight_property` | STRING | —         | Name of a numeric relationship property to use as the edge weight. If omitted, all edges are treated as equal weight. |
+    | `variant`         | STRING | `'max'`   | When `weight_property` is set: `'min'` for minimum spanning forest, `'max'` for maximum spanning forest. |
+
+    **Example**
+
+    ```cypher
+    CALL project_graph('G', ['Node'], ['Edge']);
+
+    -- Unweighted spanning forest
+    CALL spanning_forest('G')
+    RETURN src.id AS src, dst.id AS dst, forest_id
+    ORDER BY forest_id;
+
+    -- Minimum spanning forest using the 'weight' property
+    CALL spanning_forest('G', weight_property := 'weight', variant := 'min')
+    RETURN src.id AS src, dst.id AS dst, rel.weight AS w, forest_id
+    ORDER BY forest_id;
+
+    -- Maximum spanning forest
+    CALL spanning_forest('G', weight_property := 'weight', variant := 'max')
+    RETURN src.id AS src, dst.id AS dst, rel.weight AS w, forest_id
+    ORDER BY forest_id;
+    ```
+
+    **Constraints:**
+    - `SPANNING_FOREST` requires exactly one node table in the projected graph.
+    - `SPANNING_FOREST` requires exactly one relationship table in the projected graph.
+    - The weight property must be a numeric type. String or boolean columns raise a runtime error.
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Full end-to-end example
+
+The example below demonstrates PageRank on a simple directed graph.
+
+<Steps>
+  <Step title="Load the extension">
+    ```cypher
+    LOAD EXTENSION algo;
+    ```
+  </Step>
+  <Step title="Create the graph schema">
+    ```cypher
+    CREATE NODE TABLE Node (id STRING PRIMARY KEY);
+    CREATE REL TABLE Edge (FROM Node TO Node);
+    ```
+  </Step>
+  <Step title="Insert nodes and relationships">
+    ```cypher
+    CREATE (a:Node {id: 'A'}), (b:Node {id: 'B'}),
+           (c:Node {id: 'C'}), (d:Node {id: 'D'}),
+           (e:Node {id: 'E'}),
+           (a)-[:Edge]->(b), (a)-[:Edge]->(e),
+           (b)-[:Edge]->(e), (c)-[:Edge]->(e),
+           (d)-[:Edge]->(e);
+    ```
+  </Step>
+  <Step title="Project a graph">
+    ```cypher
+    CALL project_graph('G', ['Node'], ['Edge']);
+    ```
+  </Step>
+  <Step title="Run PageRank">
+    ```cypher
+    CALL page_rank('G')
+    RETURN node.id, rank
+    ORDER BY rank DESC;
+    ```
+
+    ```
+    ┌─────────┬──────────┐
+    │ node.id │ rank     │
+    ├─────────┼──────────┤
+    │ E       │ 0.130088 │
+    │ B       │ 0.042750 │
+    │ C       │ 0.030000 │
+    │ D       │ 0.030000 │
+    │ A       │ 0.030000 │
+    └─────────┴──────────┘
+    ```
+  </Step>
+  <Step title="Drop the projected graph when done">
+    ```cypher
+    CALL drop_projected_graph('G');
+    ```
+  </Step>
+</Steps>
+
+---
+
+## Algorithm reference summary
+
+| Function name | Aliases | Returns | Works on |
+|---------------|---------|---------|----------|
+| `page_rank` | `pr` | `node`, `rank` | Directed graphs |
+| `weakly_connected_components` | `wcc` | `node`, `group_id` | Undirected (edges treated bidirectionally) |
+| `strongly_connected_components` | `scc` | `node`, `group_id` | Directed graphs |
+| `strongly_connected_components_kosaraju` | `scc_ko` | `node`, `group_id` | Directed graphs |
+| `louvain` | — | `node`, `louvain_id` | Undirected (non-deterministic) |
+| `k_core_decomposition` | `kcore` | `node`, `k_degree` | Undirected |
+| `spanning_forest` | `sf` | `src`, `dst`, `rel`, `forest_id` | Single node table, single rel table |
+
+## Performance considerations
+
+- **Graph projection cost** — `project_graph` reads node and relationship tables into memory. For large graphs, ensure the buffer pool is sized appropriately.
+- **Parallelism** — Algorithms leverage Kuzu's multi-threaded execution engine. You can control the thread count with `CALL threads = <n>`.
+- **Filtered projections** — Applying predicate filters when creating the projected graph reduces the number of nodes and edges the algorithm processes, often yielding significant speedups on large datasets.
+- **PageRank convergence** — The default `tolerance` of `1e-7` is conservative. For exploratory analysis, increasing it to `1e-4` can reduce iteration count with minimal impact on result quality.

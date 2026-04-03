@@ -1,0 +1,395 @@
+---
+title: "C++ API"
+description: "Embed Kuzu directly in a C++ application using the kuzu::main namespace. The API is header-only for consumers and links against libkuzu."
+---
+
+## Installation
+
+<Steps>
+  <Step title="Download the library">
+    Download the pre-built release for your platform from the [GitHub releases page](https://github.com/kuzudb/kuzu/releases). Each release includes:
+
+    - `libkuzu.so` / `libkuzu.dylib` / `kuzu.dll` — shared library
+    - `libkuzu_static.a` / `kuzu_static.lib` — static library
+    - `kuzu.hpp` / `kuzu.h` — C++ and C headers
+
+    Alternatively, build from source following the instructions in the repository.
+  </Step>
+  <Step title="Configure your build system">
+    <Tabs>
+      <Tab title="CMake">
+        ```cmake
+        find_library(KUZU_LIB kuzu PATHS /path/to/kuzu/lib)
+        find_path(KUZU_INCLUDE kuzu.hpp PATHS /path/to/kuzu/include)
+
+        add_executable(my_app main.cpp)
+        target_include_directories(my_app PRIVATE ${KUZU_INCLUDE})
+        target_link_libraries(my_app ${KUZU_LIB})
+        ```
+      </Tab>
+      <Tab title="g++ / clang++">
+        ```bash
+        g++ -std=c++17 -I/path/to/kuzu/include \
+            main.cpp -L/path/to/kuzu/lib -lkuzu \
+            -o my_app
+        ```
+      </Tab>
+    </Tabs>
+  </Step>
+  <Step title="Include the header">
+    ```cpp
+    #include "kuzu.hpp"
+    using namespace kuzu::main;
+    ```
+  </Step>
+</Steps>
+
+## Quickstart
+
+```cpp
+#include <iostream>
+#include "kuzu.hpp"
+using namespace kuzu::main;
+
+int main() {
+    auto database   = std::make_unique<Database>("./my_graph");
+    auto connection = std::make_unique<Connection>(database.get());
+
+    // Create schema
+    connection->query("CREATE NODE TABLE Person(name STRING, age INT64, PRIMARY KEY(name));");
+
+    // Create nodes
+    connection->query("CREATE (:Person {name: 'Alice', age: 25});");
+    connection->query("CREATE (:Person {name: 'Bob', age: 30});");
+
+    // Execute a query and print results
+    auto result = connection->query("MATCH (a:Person) RETURN a.name AS NAME, a.age AS AGE;");
+    std::cout << result->toString();
+}
+```
+
+---
+
+## SystemConfig
+
+`kuzu::main::SystemConfig` configures the database at construction time.
+
+```cpp
+struct SystemConfig {
+    explicit SystemConfig(
+        uint64_t bufferPoolSize       = -1u,      // auto-detect
+        uint64_t maxNumThreads        = 0,         // auto-detect
+        bool     enableCompression    = true,
+        bool     readOnly             = false,
+        uint64_t maxDBSize            = -1u,       // 8 TB on 64-bit
+        bool     autoCheckpoint       = true,
+        uint64_t checkpointThreshold  = 16777216,  // 16 MB
+        bool     forceCheckpointOnClose = true,
+        bool     throwOnWalReplayFailure = true,
+        bool     enableChecksums      = true
+    );
+};
+```
+
+<ParamField path="bufferPoolSize" type="uint64_t" default="-1u">
+  Maximum buffer pool size in bytes. The default (`-1u`) triggers auto-detection to approximately 80% of available system memory.
+</ParamField>
+
+<ParamField path="maxNumThreads" type="uint64_t" default="0">
+  Maximum threads for query execution. `0` auto-detects from the number of hardware threads.
+</ParamField>
+
+<ParamField path="enableCompression" type="bool" default="true">
+  Enable on-disk compression for supported column types.
+</ParamField>
+
+<ParamField path="readOnly" type="bool" default="false">
+  Open in read-only mode. Multiple read-only `Database` objects may share the same path.
+</ParamField>
+
+<ParamField path="maxDBSize" type="uint64_t" default="-1u">
+  Maximum database size in bytes. Default is 8 TB on 64-bit systems.
+</ParamField>
+
+<ParamField path="autoCheckpoint" type="bool" default="true">
+  Automatically checkpoint when the WAL file grows beyond `checkpointThreshold`.
+</ParamField>
+
+<ParamField path="checkpointThreshold" type="uint64_t" default="16777216">
+  WAL file size in bytes that triggers a checkpoint (default 16 MB).
+</ParamField>
+
+<ParamField path="throwOnWalReplayFailure" type="bool" default="true">
+  Throw a `RuntimeException` if WAL replay fails on startup.
+</ParamField>
+
+<ParamField path="enableChecksums" type="bool" default="true">
+  Use checksums to detect WAL file corruption.
+</ParamField>
+
+---
+
+## Database
+
+```cpp
+namespace kuzu::main {
+
+class Database {
+public:
+    // Persistent database with optional configuration
+    explicit Database(std::string_view databasePath,
+                      SystemConfig systemConfig = SystemConfig());
+
+    ~Database();
+};
+
+} // namespace kuzu::main
+```
+
+<ParamField path="databasePath" type="std::string_view">
+  Path to the database directory. Pass an empty string or `":memory:"` for an in-memory database that is not written to disk.
+</ParamField>
+
+<ParamField path="systemConfig" type="SystemConfig" default="SystemConfig()">
+  Configuration struct. Defaults to auto-detected settings.
+</ParamField>
+
+```cpp
+// On-disk database
+auto db = std::make_unique<Database>("./my_graph");
+
+// In-memory database
+auto db = std::make_unique<Database>("");
+
+// Custom configuration
+SystemConfig config;
+config.bufferPoolSize    = 2ULL * 1024 * 1024 * 1024; // 2 GB
+config.maxNumThreads     = 8;
+config.enableCompression = true;
+auto db = std::make_unique<Database>("./my_graph", config);
+```
+
+---
+
+## Connection
+
+```cpp
+namespace kuzu::main {
+
+class Connection {
+public:
+    explicit Connection(Database* database);
+    ~Connection();
+
+    // Execute a Cypher query
+    std::unique_ptr<QueryResult> query(std::string_view query);
+
+    // Prepare a parameterized query
+    std::unique_ptr<PreparedStatement> prepare(std::string_view query);
+
+    // Execute a prepared statement (variadic parameter pairs)
+    template<typename... Args>
+    std::unique_ptr<QueryResult> execute(
+        PreparedStatement* preparedStatement,
+        std::pair<std::string, Args>... args
+    );
+
+    // Execute a prepared statement with a map
+    std::unique_ptr<QueryResult> executeWithParams(
+        PreparedStatement* preparedStatement,
+        std::unordered_map<std::string, std::unique_ptr<common::Value>> inputParams
+    );
+
+    void setMaxNumThreadForExec(uint64_t numThreads);
+    uint64_t getMaxNumThreadForExec();
+
+    void setQueryTimeOut(uint64_t timeoutInMS);  // 0 disables timeout
+    void interrupt();
+
+    // Scalar UDFs (template)
+    template<typename TR, typename... Args>
+    void createScalarFunction(std::string name, TR (*udfFunc)(Args...));
+};
+
+} // namespace kuzu::main
+```
+
+### Executing queries
+
+```cpp
+auto result = connection->query(
+    "MATCH (a:Person) RETURN a.name AS NAME, a.age AS AGE;"
+);
+std::cout << result->toString();
+```
+
+### Prepared statements
+
+```cpp
+auto stmt = connection->prepare(
+    "CREATE (:Person {name: $name, age: $age});"
+);
+
+// Variadic pair syntax
+connection->execute(stmt.get(),
+    std::make_pair(std::string("name"), std::string("Alice")),
+    std::make_pair(std::string("age"),  int64_t(25))
+);
+connection->execute(stmt.get(),
+    std::make_pair(std::string("name"), std::string("Bob")),
+    std::make_pair(std::string("age"),  int64_t(30))
+);
+```
+
+---
+
+## QueryResult
+
+```cpp
+namespace kuzu::main {
+
+class QueryResult {
+public:
+    bool isSuccess() const;
+    std::string getErrorMessage() const;
+
+    size_t getNumColumns() const;
+    std::vector<std::string> getColumnNames() const;
+    std::vector<common::LogicalType> getColumnDataTypes() const;
+
+    uint64_t getNumTuples() const;
+    bool hasNext() const;
+    std::shared_ptr<processor::FlatTuple> getNext();
+    void resetIterator();
+
+    bool hasNextQueryResult() const;
+    QueryResult* getNextQueryResult();
+
+    QuerySummary* getQuerySummary() const;
+
+    std::string toString() const;
+
+    // Arrow C Data Interface
+    std::unique_ptr<ArrowSchema> getArrowSchema() const;
+    std::unique_ptr<ArrowArray>  getNextArrowChunk(int64_t chunkSize);
+};
+
+} // namespace kuzu::main
+```
+
+### Iterating rows
+
+```cpp
+auto result = connection->query(
+    "MATCH (p:Person) RETURN p.name, p.age;"
+);
+
+while (result->hasNext()) {
+    auto row = result->getNext();
+    // row is a shared_ptr<processor::FlatTuple>
+    std::cout << row->toString() << "\n";
+}
+```
+
+### Accessing individual values
+
+```cpp
+while (result->hasNext()) {
+    auto row = result->getNext();
+    // getValue<T>(columnIndex) extracts the typed value
+    auto name = row->getValue(0)->getValue<std::string>();
+    auto age  = row->getValue(1)->getValue<int64_t>();
+    std::cout << name << " is " << age << " years old\n";
+}
+```
+
+### Query timing
+
+```cpp
+auto* summary = result->getQuerySummary();
+double compile_ms = summary->getCompilingTime();
+double exec_ms    = summary->getExecutionTime();
+```
+
+### Arrow export
+
+```cpp
+auto schema = result->getArrowSchema();
+
+while (result->hasNextArrowChunk()) {
+    auto chunk = result->getNextArrowChunk(1000);  // up to 1000 rows
+    // Pass chunk to your Arrow consumer
+}
+```
+
+---
+
+## User-defined scalar functions
+
+Register a C++ function pointer as a Cypher function:
+
+```cpp
+int64_t double_value(int64_t x) { return x * 2; }
+
+connection->createScalarFunction("double_value", &double_value);
+
+auto result = connection->query("MATCH (p:Person) RETURN double_value(p.age)");
+```
+
+---
+
+## Full example
+
+```cpp
+#include <iostream>
+#include <memory>
+#include "kuzu.hpp"
+using namespace kuzu::main;
+
+int main() {
+    // Open (or create) a persistent database
+    auto db   = std::make_unique<Database>("./social_graph");
+    auto conn = std::make_unique<Connection>(db.get());
+
+    // Schema
+    conn->query("CREATE NODE TABLE Person("
+                "  name STRING, age INT64, PRIMARY KEY(name));");
+    conn->query("CREATE REL TABLE Knows("
+                "  FROM Person TO Person, since INT64);");
+
+    // Data
+    conn->query("CREATE (:Person {name: 'Alice', age: 30});");
+    conn->query("CREATE (:Person {name: 'Bob',   age: 25});");
+    conn->query("MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) "
+                "CREATE (a)-[:Knows {since: 2020}]->(b);");
+
+    // Prepared statement
+    auto stmt = conn->prepare(
+        "MATCH (a:Person {name: $name})-[:Knows]->(b) "
+        "RETURN b.name, b.age;"
+    );
+
+    auto result = conn->execute(stmt.get(),
+        std::make_pair(std::string("name"), std::string("Alice"))
+    );
+
+    // Print results
+    std::cout << result->toString();
+
+    // Iterate over multi-statement results
+    auto multi = conn->query(
+        "MATCH (p:Person) RETURN count(p);"
+        "MATCH (r:Knows)  RETURN count(r);"
+    );
+    do {
+        std::cout << multi->toString();
+        multi = std::unique_ptr<QueryResult>(multi->getNextQueryResult());
+    } while (multi != nullptr);
+
+    return 0;
+}
+```
+
+<Tip>
+  Use `std::unique_ptr` for `Database`, `Connection`, and `QueryResult` objects to ensure they are destroyed in the correct order (connection before database).
+</Tip>

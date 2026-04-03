@@ -1,0 +1,354 @@
+---
+title: "Java API"
+description: "Use Kuzu from Java via the com.kuzudb package, which wraps the native C++ library through JNI."
+---
+
+## Installation
+
+<Tabs>
+  <Tab title="Maven">
+    ```xml
+    <dependency>
+      <groupId>com.kuzudb</groupId>
+      <artifactId>kuzu</artifactId>
+      <version>0.11.2.2</version>
+    </dependency>
+    ```
+  </Tab>
+  <Tab title="Gradle (Kotlin DSL)">
+    ```kotlin
+    dependencies {
+        implementation("com.kuzudb:kuzu:0.11.2.2")
+    }
+    ```
+  </Tab>
+  <Tab title="Gradle (Groovy DSL)">
+    ```groovy
+    dependencies {
+        implementation 'com.kuzudb:kuzu:0.11.2.2'
+    }
+    ```
+  </Tab>
+</Tabs>
+
+<Note>
+  Check [Maven Central](https://central.sonatype.com/artifact/com.kuzudb/kuzu) for the latest release version.
+</Note>
+
+## Quickstart
+
+```java
+import com.kuzudb.*;
+
+public class Main {
+    public static void main(String[] args) {
+        try (Database db = new Database("./my_graph");
+             Connection conn = new Connection(db)) {
+
+            conn.query("CREATE NODE TABLE Person(name STRING, age INT64, PRIMARY KEY(name))");
+            conn.query("CREATE (:Person {name: 'Alice', age: 25})");
+            conn.query("CREATE (:Person {name: 'Bob', age: 30})");
+
+            try (QueryResult result = conn.query("MATCH (p:Person) RETURN p.name, p.age")) {
+                while (result.hasNext()) {
+                    FlatTuple row = result.getNext();
+                    System.out.println(row);
+                }
+            }
+        }
+    }
+}
+```
+
+---
+
+## Database
+
+`com.kuzudb.Database` is the main entry point. It implements `AutoCloseable`, so it can be used in a try-with-resources statement.
+
+### Constructors
+
+```java
+// In-memory database with default settings
+Database()
+
+// Persistent database with default settings
+Database(String databasePath)
+
+// Full configuration
+Database(
+    String  databasePath,
+    long    bufferPoolSize,
+    boolean enableCompression,
+    boolean readOnly,
+    long    maxDBSize,
+    boolean autoCheckpoint,
+    long    checkpointThreshold,
+    boolean throwOnWalReplayFailure,
+    boolean enableChecksums
+)
+```
+
+<ParamField path="databasePath" type="String">
+  Path to the database directory. Pass an empty string or `":memory:"` for an in-memory database.
+</ParamField>
+
+<ParamField path="bufferPoolSize" type="long" default="0">
+  Maximum buffer pool size in bytes. `0` uses an auto-detected size based on available system memory.
+</ParamField>
+
+<ParamField path="enableCompression" type="boolean" default="true">
+  Enable on-disk compression for supported column types.
+</ParamField>
+
+<ParamField path="readOnly" type="boolean" default="false">
+  Open in read-only mode. Multiple read-only instances can share the same database path.
+</ParamField>
+
+<ParamField path="maxDBSize" type="long" default="0">
+  Maximum database size in bytes. `0` uses the platform default.
+</ParamField>
+
+<ParamField path="autoCheckpoint" type="boolean" default="true">
+  Automatically checkpoint when the WAL file exceeds `checkpointThreshold`.
+</ParamField>
+
+<ParamField path="checkpointThreshold" type="long" default="-1">
+  WAL file size threshold in bytes. `-1` uses the library default (16 MB).
+</ParamField>
+
+<ParamField path="throwOnWalReplayFailure" type="boolean" default="true">
+  Throw an exception if WAL replay fails on startup.
+</ParamField>
+
+<ParamField path="enableChecksums" type="boolean" default="true">
+  Use checksums to detect WAL file corruption.
+</ParamField>
+
+### In-memory database
+
+```java
+Database db = new Database();        // default no-arg constructor → in-memory
+Database db = new Database(":memory:");
+Database db = new Database("");
+```
+
+### Closing
+
+`Database` implements `AutoCloseable`. Use try-with-resources to release the file lock automatically:
+
+```java
+try (Database db = new Database("./my_graph")) {
+    // use db
+}
+// db is closed here
+```
+
+---
+
+## Connection
+
+`com.kuzudb.Connection` interacts with a `Database` instance. Each connection is thread-safe. Multiple connections can share the same `Database`.
+
+```java
+Connection(Database db)
+```
+
+<ParamField path="db" type="Database">
+  The `Database` instance to connect to. Must not be `null`.
+</ParamField>
+
+### Executing queries
+
+```java
+// Execute a Cypher query string
+QueryResult query(String queryStr)
+
+// Prepare a statement
+PreparedStatement prepare(String queryStr)
+
+// Execute a prepared statement with parameters
+QueryResult execute(PreparedStatement ps, Map<String, Value> params)
+```
+
+### Thread management
+
+```java
+long getMaxNumThreadForExec()
+void setMaxNumThreadForExec(long numThreads)
+```
+
+### Timeout and cancellation
+
+```java
+void setQueryTimeout(long timeoutInMs)  // 0 disables the timeout
+void interrupt()                        // cancel the current query
+```
+
+### Closing
+
+```java
+conn.close();
+```
+
+---
+
+## QueryResult
+
+`com.kuzudb.QueryResult` holds the rows returned by a query. It implements `AutoCloseable`.
+
+### Iterating rows
+
+```java
+try (QueryResult result = conn.query("MATCH (p:Person) RETURN p.name, p.age")) {
+    while (result.hasNext()) {
+        FlatTuple row = result.getNext();
+        // row.getValue(index) returns a com.kuzudb.Value
+        System.out.println(row.getValue(0) + ", " + row.getValue(1));
+    }
+}
+```
+
+### Key methods
+
+<AccordionGroup>
+  <Accordion title="boolean isSuccess()">
+    Returns `true` if the query completed without errors.
+  </Accordion>
+
+  <Accordion title="String getErrorMessage()">
+    Returns the error message when `isSuccess()` is `false`.
+  </Accordion>
+
+  <Accordion title="boolean hasNext()">
+    Returns `true` if there are more rows to read.
+  </Accordion>
+
+  <Accordion title="FlatTuple getNext()">
+    Returns the next row. The same `FlatTuple` object is reused across calls; copy its data before calling `getNext()` again.
+  </Accordion>
+
+  <Accordion title="boolean hasNextQueryResult()">
+    Returns `true` when a multi-statement query has further result sets to read.
+  </Accordion>
+
+  <Accordion title="QueryResult getNextQueryResult()">
+    Advances to the next result set in a multi-statement query.
+  </Accordion>
+
+  <Accordion title="long getNumColumns()">
+    Returns the number of columns in the result.
+  </Accordion>
+
+  <Accordion title="String getColumnName(long index)">
+    Returns the column name at the given (0-based) index.
+  </Accordion>
+
+  <Accordion title="DataType getColumnDataType(long index)">
+    Returns the `DataType` of the column at the given index.
+  </Accordion>
+
+  <Accordion title="long getNumTuples()">
+    Returns the total number of rows in the result.
+  </Accordion>
+
+  <Accordion title="QuerySummary getQuerySummary()">
+    Returns timing information (compiling and execution time in milliseconds).
+  </Accordion>
+
+  <Accordion title="void resetIterator()">
+    Resets the cursor to the beginning of the result.
+  </Accordion>
+
+  <Accordion title="String toString()">
+    Returns a formatted string representation of the full result set.
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## PreparedStatement
+
+Created by `conn.prepare()`. A prepared statement is compiled once and can be executed many times with different parameters.
+
+```java
+boolean isSuccess()
+String  getErrorMessage()
+```
+
+---
+
+## FlatTuple and Value
+
+Each row from `QueryResult.getNext()` is a `FlatTuple`. Values inside are typed using `com.kuzudb.Value`.
+
+```java
+FlatTuple row = result.getNext();
+Value     val = row.getValue(0);
+
+// Get the Java object representation
+Object obj = val.getValue();
+
+// Get the Kuzu data type
+DataType type = val.getDataType();
+```
+
+---
+
+## Full example
+
+```java
+import com.kuzudb.*;
+import java.util.HashMap;
+import java.util.Map;
+
+public class SocialGraph {
+    public static void main(String[] args) {
+        try (Database db = new Database("./social_graph");
+             Connection conn = new Connection(db)) {
+
+            // Schema
+            conn.query(
+                "CREATE NODE TABLE Person(name STRING, age INT64, PRIMARY KEY(name))"
+            );
+            conn.query(
+                "CREATE REL TABLE Knows(FROM Person TO Person, since INT64)"
+            );
+
+            // Data
+            conn.query("CREATE (:Person {name: 'Alice', age: 30})");
+            conn.query("CREATE (:Person {name: 'Bob',   age: 25})");
+            conn.query(
+                "MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) " +
+                "CREATE (a)-[:Knows {since: 2020}]->(b)"
+            );
+
+            // Prepared statement with parameters
+            try (PreparedStatement stmt = conn.prepare(
+                "MATCH (a:Person {name: $name})-[:Knows]->(b) RETURN b.name, b.age"
+            )) {
+                Map<String, Value> params = new HashMap<>();
+                params.put("name", new Value("Alice"));
+
+                try (QueryResult result = conn.execute(stmt, params)) {
+                    System.out.println(result);
+                }
+            }
+
+            // Multi-statement query
+            QueryResult r1 = conn.query("MATCH (p:Person) RETURN count(p)");
+            System.out.println(r1.getNext().getValue(0));
+
+            // Check for multiple result sets
+            if (r1.hasNextQueryResult()) {
+                QueryResult r2 = r1.getNextQueryResult();
+                // handle r2 ...
+            }
+        }
+    }
+}
+```
+
+<Tip>
+  All `QueryResult`, `PreparedStatement`, and `Connection` objects implement `AutoCloseable`. Wrap them in try-with-resources blocks to ensure the underlying native memory is released promptly.
+</Tip>

@@ -1,0 +1,217 @@
+---
+title: "Full-text search"
+description: "Create BM25 full-text search indexes on node tables and query them with ranked results using the fts extension."
+keywords: ["full-text search", "fts", "BM25", "stemming", "stop words", "index", "CREATE_FTS_INDEX", "QUERY_FTS_INDEX"]
+---
+
+The `fts` extension adds full-text search to Kuzu. It builds an inverted index over one or more string properties on a node table and ranks results using the BM25 scoring model. The index stays synchronized with inserts, updates, and deletes.
+
+<Note>
+The `fts` extension is pre-installed in Kuzu v0.11.3 and later. You only need to load it — no separate installation step is required.
+</Note>
+
+## Loading the extension
+
+```cypher
+LOAD EXTENSION fts;
+```
+
+For versions before v0.11.3, install from a repository first:
+
+```cypher
+INSTALL fts FROM 'http://localhost:8080/';
+LOAD EXTENSION fts;
+```
+
+## Creating an index
+
+Use `CREATE_FTS_INDEX` to build a full-text search index on one or more string columns of a node table.
+
+```cypher
+CALL CREATE_FTS_INDEX(
+    '<table_name>',
+    '<index_name>',
+    ['<column1>', '<column2>', ...]
+);
+```
+
+### Example
+
+```cypher
+-- Create a Book node table
+CREATE NODE TABLE Book (
+    ID     SERIAL,
+    title  STRING,
+    author STRING,
+    abstract STRING,
+    PRIMARY KEY (ID)
+);
+
+-- Build a full-text index over three columns
+CALL CREATE_FTS_INDEX('Book', 'book_index', ['abstract', 'author', 'title']);
+```
+
+You can create multiple indexes on the same table, including indexes that cover different column subsets:
+
+```cypher
+CALL CREATE_FTS_INDEX('Book', 'book_index_small', ['abstract']);
+```
+
+### Optional parameters
+
+| Parameter      | Type   | Default     | Description |
+|----------------|--------|-------------|-------------|
+| `stemmer`      | STRING | `'english'` | Stemming algorithm to apply during indexing and querying. |
+| `stopWords`    | STRING | `'default'` | Built-in stop word list (`'default'`), a node table name, or a file path. |
+| `ignorePattern`| STRING | `''`        | Regex pattern. Tokens matching this pattern are excluded from the index. |
+| `tokenizer`    | STRING | `'simple'`  | Tokenization strategy. Use `'jieba'` for Chinese text. |
+
+#### Supported stemmers
+
+`arabic`, `basque`, `catalan`, `danish`, `dutch`, `english`, `finnish`, `french`, `german`, `greek`, `hindi`, `hungarian`, `indonesian`, `irish`, `italian`, `lithuanian`, `nepali`, `norwegian`, `porter`, `portuguese`, `romanian`, `russian`, `serbian`, `spanish`, `swedish`, `tamil`, `turkish`, or `none` (no stemming).
+
+```cypher
+-- Use the Porter stemmer
+CALL CREATE_FTS_INDEX('Book', 'book_index', ['abstract', 'author', 'title'], stemmer := 'porter');
+
+-- Use a custom stop words table (must be a node table with a single STRING primary key column)
+CALL CREATE_FTS_INDEX('Book', 'book_index', ['abstract'], stopWords := 'MyStopWords');
+```
+
+You can also invoke the `STEM` scalar function directly to inspect how a word is stemmed:
+
+```cypher
+RETURN STEM('running', 'english');
+-- returns: run
+```
+
+## Querying an index
+
+Use `QUERY_FTS_INDEX` to search an existing index. The function returns matched nodes along with a BM25 relevance score.
+
+```cypher
+CALL QUERY_FTS_INDEX('<table_name>', '<index_name>', '<search_terms>')
+RETURN node.<property>, score
+ORDER BY score DESC;
+```
+
+The variable `node` binds to each matched node. You can access any property on it and chain further Cypher clauses.
+
+### Example
+
+```cypher
+CALL QUERY_FTS_INDEX('Book', 'book_index', 'a quantum machine')
+RETURN node.title, score
+ORDER BY score DESC;
+```
+
+```
+┌──────────────────────┬──────────┐
+│ node.title           │ score    │
+├──────────────────────┼──────────┤
+│ The Quantum World    │ 2.841... │
+│ Learning Machines    │ 1.923... │
+└──────────────────────┴──────────┘
+```
+
+### Optional query parameters
+
+| Parameter     | Type   | Default | Description |
+|---------------|--------|---------|-------------|
+| `conjunctive` | BOOL   | `false` | When `true`, all query terms must be present in a document (AND semantics). When `false`, any term match is sufficient (OR semantics). |
+| `top`         | UINT64 | — | Return at most this many results. |
+| `k`           | FLOAT  | `1.2`   | BM25 term frequency saturation parameter. Must be ≥ 0. |
+| `b`           | FLOAT  | `0.75`  | BM25 document length normalization parameter. Must be in `[0, 1]`. |
+
+```cypher
+-- Require all terms to appear in matching documents
+CALL QUERY_FTS_INDEX('Book', 'book_index', 'test-case', conjunctive := true)
+RETURN node.title;
+
+-- Return only the top 5 results
+CALL QUERY_FTS_INDEX('Book', 'book_index', 'quantum machine', top := 5)
+RETURN node.title, score
+ORDER BY score DESC;
+
+-- Tune BM25 parameters
+CALL QUERY_FTS_INDEX('Book', 'book_index', 'quantum', k := 2.0, b := 0.5)
+RETURN node.title, score
+ORDER BY score DESC;
+```
+
+## End-to-end example
+
+<Steps>
+  <Step title="Load the extension">
+    ```cypher
+    LOAD EXTENSION fts;
+    ```
+  </Step>
+  <Step title="Create the table and insert data">
+    ```cypher
+    CREATE NODE TABLE Book (
+        ID       SERIAL,
+        title    STRING,
+        author   STRING,
+        abstract STRING,
+        PRIMARY KEY (ID)
+    );
+
+    CREATE (:Book {title: 'The Quantum World',   author: 'Alice Johnson', abstract: 'An exploration of quantum mechanics.'});
+    CREATE (:Book {title: 'Learning Machines',   author: 'Emma Brown',   abstract: 'An introduction to machine learning techniques.'});
+    CREATE (:Book {title: 'Echoes of the Past',  author: 'Bob Smith',    abstract: 'A journey through ancient history.'});
+    CREATE (:Book {title: 'The Dragon\'s Call',  author: 'J. K. Rowling',abstract: 'A fantasy tale of dragons and magic.'});
+    ```
+  </Step>
+  <Step title="Build the index">
+    ```cypher
+    CALL CREATE_FTS_INDEX('Book', 'book_index', ['abstract', 'author', 'title'], stemmer := 'porter');
+    ```
+  </Step>
+  <Step title="Search the index">
+    ```cypher
+    CALL QUERY_FTS_INDEX('Book', 'book_index', 'past magic world')
+    RETURN node.title, score
+    ORDER BY score DESC;
+    ```
+  </Step>
+  <Step title="Join results with other graph data">
+    ```cypher
+    -- Combine FTS results with a relationship traversal
+    CALL QUERY_FTS_INDEX('Book', 'book_index', 'machine learning')
+    MATCH (node)-[:WRITTEN_BY]->(a:Author)
+    RETURN node.title, a.name, score
+    ORDER BY score DESC;
+    ```
+  </Step>
+</Steps>
+
+## Index lifecycle
+
+### Listing indexes
+
+```cypher
+CALL SHOW_INDEXES() RETURN *;
+```
+
+### Dropping an index
+
+You must drop an FTS index before dropping the table it covers.
+
+```cypher
+CALL DROP_FTS_INDEX('Book', 'book_index');
+```
+
+Attempting to drop the table while an index still exists raises an error:
+
+```
+Binder exception: Cannot delete node table Book because it is referenced by index book_index.
+```
+
+## Behavior notes
+
+- **Stop words** — The default stop word list filters common English function words (`the`, `a`, `is`, etc.). They are removed from both index and query terms.
+- **Case normalization** — All tokens are lowercased before indexing and querying.
+- **Stemming** — Stemming is applied symmetrically: index-time and query-time use the same algorithm, so `"quacked"` matches documents containing `"quack"` or `"quacking"`.
+- **Dynamic updates** — Insertions, deletions, and updates to indexed rows are reflected in subsequent queries without rebuilding the index.
+- **Empty or stop-word-only queries** — Return zero results.

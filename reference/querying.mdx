@@ -1,0 +1,645 @@
+---
+title: "Querying"
+description: "Complete reference for Kuzu read and write clauses: MATCH, WHERE, RETURN, WITH, aggregation, path patterns, CREATE, MERGE, SET, DELETE, and subqueries."
+---
+
+All examples use the demo schema defined in [Data definition](/reference/data-definition#full-demo-schema):
+
+- `User(name STRING PK, age INT64)`
+- `City(name STRING PK, population INT64)`
+- `Follows(FROM User TO User, since INT64)`
+- `LivesIn(FROM User TO City)`
+
+---
+
+## MATCH
+
+`MATCH` finds subgraphs that satisfy a given pattern.
+
+### Single-label match
+
+```cypher
+MATCH (u:User)
+RETURN u.name, u.age
+```
+
+### Multi-label match (OR semantics)
+
+```cypher
+-- Returns both User and City nodes
+MATCH (a:User:City)
+RETURN a
+```
+
+### Any label
+
+```cypher
+MATCH (a)
+RETURN a
+```
+
+### Relationship pattern
+
+```cypher
+MATCH (a:User)-[e:Follows]->(b:User)
+RETURN a.name, e.since, b.name
+```
+
+### Multiple patterns in one MATCH
+
+Multiple comma-separated patterns are evaluated as a join:
+
+```cypher
+MATCH (a:User)-[:Follows]->(b:User), (b)-[:LivesIn]->(c:City)
+WHERE a.name = 'Adam'
+RETURN b.name, c.name
+```
+
+### Undirected relationship
+
+```cypher
+MATCH (a:User)-[e:Follows]-(b:User)
+WHERE a.name = 'Karissa'
+RETURN b.name
+```
+
+### Property filter in pattern
+
+```cypher
+MATCH (a:User)-[e:Follows {since: 2020}]->(b:User {name: 'Zhang'})
+RETURN a.name, e.since
+```
+
+### Multi-hop pattern
+
+```cypher
+MATCH (a:User)-[:Follows]->(:User)-[:LivesIn]->(c:City)
+WHERE a.name = 'Adam'
+RETURN c.name, c.population
+```
+
+### Cyclic pattern
+
+```cypher
+MATCH (a:User)-[:Follows]->(b:User)-[:Follows]->(c:User),
+      (a)-[:Follows]->(c)
+RETURN a.name, b.name, c.name
+```
+
+### Multiple relationship types (OR)
+
+```cypher
+MATCH (a:User)-[e:Follows|:LivesIn]->(b)
+RETURN a.name, label(b), b.name
+```
+
+---
+
+## OPTIONAL MATCH
+
+`OPTIONAL MATCH` works like a SQL `LEFT OUTER JOIN`: rows where the pattern does not match are preserved with `null` values.
+
+```cypher
+MATCH (u:User)
+OPTIONAL MATCH (u)-[:Follows]->(u2:User)
+RETURN u.name, u2.name
+-- u2.name will be null for users with no outgoing Follows
+```
+
+---
+
+## WHERE
+
+`WHERE` filters rows using any boolean expression.
+
+### Comparison predicates
+
+```cypher
+MATCH (u:User)
+WHERE u.age > 30 AND u.age < 60
+RETURN u.name
+```
+
+### OR / NOT
+
+```cypher
+MATCH (u:User)
+WHERE u.age > 45 OR starts_with(u.name, 'Kar')
+RETURN u.*
+```
+
+### IS NULL / IS NOT NULL
+
+```cypher
+MATCH (u:User)
+WHERE u.age IS NOT NULL
+RETURN u.name
+```
+
+### IN
+
+```cypher
+MATCH (u:User)
+WHERE u.name IN ['Adam', 'Zhang', 'Noura']
+RETURN u.name
+```
+
+### String predicates
+
+```cypher
+MATCH (u:User)
+WHERE u.name STARTS WITH 'A'
+RETURN u.name
+
+MATCH (u:User)
+WHERE u.name ENDS WITH 'a'
+RETURN u.name
+
+MATCH (u:User)
+WHERE u.name CONTAINS 'iss'
+RETURN u.name
+
+-- Regular expression
+MATCH (u:User)
+WHERE u.name =~ 'A.*'
+RETURN u.name
+```
+
+---
+
+## RETURN
+
+### All properties of a node
+
+```cypher
+MATCH (u:User)
+RETURN u.*          -- all properties
+```
+
+```cypher
+MATCH (u:User)
+RETURN u            -- full node including internal ID and label
+```
+
+### Aliases
+
+```cypher
+MATCH (u:User)-[:Follows]->(v:User)
+RETURN u.name AS follower, v.name AS followed
+```
+
+### DISTINCT
+
+```cypher
+MATCH (u:User)-[e:Follows]->(v:User)
+RETURN DISTINCT u.name, u.age
+```
+
+### Wildcard (all bound variables)
+
+```cypher
+MATCH (a:User)-[e:Follows]->(b:User)
+RETURN *
+```
+
+---
+
+## ORDER BY / SKIP / LIMIT
+
+```cypher
+-- Top 3 oldest users
+MATCH (u:User)
+RETURN u.name
+ORDER BY u.age DESC
+LIMIT 3
+
+-- Pagination: skip the first 2 rows
+MATCH (u:User)
+RETURN u.name
+ORDER BY u.age
+SKIP 2
+
+-- Sort by multiple columns
+MATCH (u:User)-[e:Follows]->(v:User)
+RETURN u.name, v.name, e.since
+ORDER BY e.since DESC, u.name ASC
+LIMIT 10
+```
+
+---
+
+## WITH
+
+`WITH` projects columns from one query part to the next, optionally filtering and aggregating.
+
+### Basic projection
+
+```cypher
+MATCH (u:User)
+WITH u, u.age AS age
+WHERE age > 30
+RETURN u.name, age
+```
+
+### Aggregation then filter (HAVING equivalent)
+
+```cypher
+MATCH (u:User)-[:LivesIn]->(c:City)
+WITH c.name AS city, COUNT(*) AS residents
+WHERE residents > 1
+RETURN city, residents
+ORDER BY residents DESC
+```
+
+### Chaining query parts
+
+```cypher
+-- Find the oldest user, then their followers
+MATCH (u:User)
+WITH u ORDER BY u.age DESC LIMIT 1
+MATCH (u)-[:Follows]->(v:User)
+RETURN v.name
+```
+
+---
+
+## UNWIND
+
+Expands a list into individual rows.
+
+```cypher
+UNWIND ['Amy', 'Bob', 'Carol'] AS name
+RETURN name
+
+-- Unwind nested lists
+UNWIND [['Amy'], ['Bob', 'Carol']] AS nameList
+RETURN nameList
+```
+
+Combining with MATCH:
+
+```cypher
+WITH ['Adam', 'Zhang'] AS names
+UNWIND names AS name
+MATCH (u:User {name: name})
+RETURN u.name, u.age
+```
+
+---
+
+## Aggregation
+
+Aggregation functions collapse groups of rows into a single value.
+
+```cypher
+-- Count all users
+MATCH (u:User)
+RETURN COUNT(*)
+
+-- Count non-null ages
+MATCH (u:User)
+RETURN COUNT(u.age)
+
+-- Average age
+MATCH (u:User)
+RETURN AVG(u.age)
+
+-- Per-city statistics
+MATCH (u:User)-[:LivesIn]->(c:City)
+RETURN c.name, COUNT(*) AS residents, AVG(u.age) AS avgAge
+ORDER BY residents DESC
+
+-- Collect values into a list
+MATCH (u:User)
+RETURN collect(u.name) AS allNames
+
+-- DISTINCT in aggregation
+MATCH (u:User)-[:Follows]->(v:User)
+RETURN u.name, COUNT(DISTINCT v.name) AS uniqueFollowees
+```
+
+| Function | Description |
+|---|---|
+| `COUNT(*)` | Count all rows |
+| `COUNT(expr)` | Count non-null values |
+| `SUM(expr)` | Sum of values |
+| `AVG(expr)` | Arithmetic mean |
+| `MIN(expr)` | Minimum value |
+| `MAX(expr)` | Maximum value |
+| `collect(expr)` | Aggregate values into a list |
+
+---
+
+## Variable-length paths
+
+Variable-length paths match chains of relationships with a bounded or unbounded hop count.
+
+### Basic syntax
+
+```cypher
+(start)-[:RelType*min..max]->(end)
+```
+
+```cypher
+-- 1 to 2 hops of Follows
+MATCH (a:User)-[e:Follows*1..2]->(b:User)
+WHERE a.name = 'Adam'
+RETURN b.name, length(e) AS hops
+```
+
+### Path variable
+
+Bind the entire path to a variable with `p = ...`:
+
+```cypher
+MATCH p = (a:User)-[:Follows*1..2]->(b:User)
+WHERE a.name = 'Adam'
+RETURN nodes(p), rels(p)
+```
+
+### Recursive filter (comprehension)
+
+Filter nodes and relationships along the path:
+
+```cypher
+MATCH (a:User)-[e:Follows*1..2 (r, n | WHERE r.since > 2020 | {r.since}, {n.name})]->(b:User)
+WHERE a.name = 'Adam'
+RETURN b.name, e
+```
+
+The comprehension syntax is `(relVar, nodeVar | WHERE condition | {rel projections}, {node projections})`.
+
+### Shortest path
+
+```cypher
+-- One shortest path
+MATCH (a:User)-[e:Follows* SHORTEST 1..4]->(b:City)
+WHERE a.name = 'Adam'
+RETURN b.name, length(e)
+
+-- All shortest paths
+MATCH p = (a)-[* ALL SHORTEST 1..3]-(b)
+WHERE a.name = 'Zhang' AND b.name = 'Waterloo'
+RETURN nodes(p)
+```
+
+### Weighted shortest path (WSHORTEST)
+
+```cypher
+MATCH (a:User)-[e* WSHORTEST (r) (r.cost) 1..10]->(b:City)
+WHERE a.name = 'Adam'
+RETURN b.name, cost(e)
+```
+
+The `WSHORTEST` keyword takes the weight expression in parentheses.
+
+### Trail and acyclic paths
+
+```cypher
+-- No repeated edges
+MATCH (a:User)-[e* TRAIL 1..5]->(b:User)
+RETURN a.name, b.name
+
+-- No repeated nodes
+MATCH (a:User)-[e* ACYCLIC 1..5]->(b:User)
+RETURN a.name, b.name
+```
+
+---
+
+## CREATE
+
+Creates new nodes and relationships.
+
+### Create nodes
+
+```cypher
+-- Create a single node
+CREATE (u:User {name: 'Eve', age: 28})
+
+-- Create and return
+CREATE (u:User {name: 'Eve', age: 28})
+RETURN u
+```
+
+### Create relationships
+
+```cypher
+-- Create a relationship between existing nodes
+MATCH (a:User {name: 'Adam'}), (b:User {name: 'Eve'})
+CREATE (a)-[:Follows {since: 2024}]->(b)
+
+-- Create node and relationship in one statement
+MATCH (a:User {name: 'Adam'})
+CREATE (a)-[:Follows {since: 2024}]->(b:User {name: 'Eve', age: 28})
+RETURN b
+```
+
+---
+
+## MERGE
+
+`MERGE` is an upsert: it matches an existing pattern or creates it if it does not exist.
+
+### Basic MERGE
+
+```cypher
+-- Match or create the node
+MERGE (u:User {name: 'Eve'})
+RETURN u.name
+```
+
+### ON CREATE SET / ON MATCH SET
+
+Set properties depending on whether the pattern was created or already existed:
+
+```cypher
+MATCH (a:User {name: 'Adam'}), (b:User {name: 'Eve'})
+MERGE (a)-[e:Follows]->(b)
+ON CREATE SET e.since = 2024
+ON MATCH SET  e.since = 2023
+RETURN e.since
+```
+
+### MERGE with multiple patterns
+
+```cypher
+MERGE (a:User {name: 'New1'})
+MERGE (b:User {name: 'New2'})
+MERGE (a)-[:Follows]->(b)
+RETURN a.name, b.name
+```
+
+<Warning>
+`MERGE` on a node with only a subset of properties will create a new node if no node matches **all** the specified properties. Make sure to include the primary key in the pattern.
+</Warning>
+
+---
+
+## SET
+
+Updates properties on matched nodes or relationships.
+
+```cypher
+-- Update a single property
+MATCH (u:User {name: 'Adam'})
+SET u.age = 31
+
+-- Update multiple properties
+MATCH (u:User {name: 'Adam'})
+SET u.age = 31, u.email = 'adam@example.com'
+
+-- Copy all properties from a map
+MATCH (u:User {name: 'Adam'})
+SET u = {age: 31, name: 'Adam'}
+```
+
+---
+
+## DELETE
+
+Removes relationships or nodes.
+
+### Delete a relationship
+
+```cypher
+MATCH (a:User {name: 'Adam'})-[e:Follows]->(b:User {name: 'Karissa'})
+DELETE e
+```
+
+### Delete a node (must have no relationships)
+
+```cypher
+MATCH (u:User {name: 'Eve'})
+DELETE u
+```
+
+### DETACH DELETE (node + all relationships)
+
+```cypher
+MATCH (u:User {name: 'Eve'})
+DETACH DELETE u
+```
+
+---
+
+## CALL (in-query)
+
+Call a built-in table function inside a query. Results can be filtered with `WHERE` and renamed with `YIELD`.
+
+```cypher
+-- List all tables
+CALL show_tables() RETURN *
+
+-- Describe a table
+CALL table_info('User') RETURN *
+
+-- Show relationship connections
+CALL show_connection('Follows') RETURN *
+
+-- Tune thread count
+CALL threads = 4
+```
+
+### YIELD
+
+Rename output columns from a table function:
+
+```cypher
+CALL table_info('User')
+YIELD name AS colName, type AS colType
+RETURN colName, colType
+```
+
+---
+
+## EXISTS and COUNT subqueries
+
+### EXISTS
+
+```cypher
+-- Users who follow someone three hops away
+MATCH (u:User)
+WHERE u.age < 100
+  AND EXISTS { MATCH (u)-[:Follows*3..3]->(b:User) }
+RETURN u.name, u.age
+
+-- Nested EXISTS
+MATCH (u:User)
+WHERE EXISTS {
+  MATCH (u)-[:Follows*3..3]->(b:User)
+  WHERE EXISTS { MATCH (b)-[:Follows]->(c:User) }
+}
+RETURN u.name
+```
+
+### COUNT subquery
+
+Counts matching rows and returns an integer inline:
+
+```cypher
+MATCH (u:User)
+RETURN u.name,
+       COUNT { MATCH (u)<-[:Follows]-(b:User) } AS followerCount
+ORDER BY followerCount
+```
+
+---
+
+## Path utility functions
+
+These functions operate on path variables (`p = ...`) or relationship lists from variable-length patterns.
+
+| Function | Description |
+|---|---|
+| `nodes(path)` | List of nodes in the path |
+| `rels(path)` | List of relationships in the path |
+| `length(path)` | Number of relationships in the path |
+| `properties(nodes(p), 'prop')` | Extract a property from each node |
+| `properties(rels(p), 'prop')` | Extract a property from each relationship |
+
+```cypher
+MATCH p = (a:User)-[:Follows*1..2]->(b:User)
+WHERE a.name = 'Adam'
+RETURN nodes(p), rels(p), length(p)
+
+MATCH p = (a:User)-[:Follows*1..2]->(b:User)
+WHERE a.name = 'Adam'
+RETURN properties(nodes(p), 'name'), properties(rels(p), 'since')
+```
+
+---
+
+## UNION / UNION ALL
+
+Combine results of multiple queries. Columns must be compatible in name and type.
+
+```cypher
+-- UNION deduplicates; UNION ALL keeps all rows
+MATCH (u:User)-[:LivesIn]->(c:City {name: 'Waterloo'})
+RETURN u.name
+UNION ALL
+MATCH (u:User)-[:LivesIn]->(c:City {name: 'Kitchener'})
+RETURN u.name
+```
+
+---
+
+## Hints
+
+Hints let you guide the join order planner when you know the optimal strategy:
+
+```cypher
+MATCH (a:User)-[:Follows]->(b:User)-[:LivesIn]->(c:City)
+WHERE a.name = 'Adam'
+RETURN c.name
+HINT a JOIN b JOIN c
+```
+
+Multi-join hint:
+
+```cypher
+MATCH (a:User)-[:Follows]->(b:User), (a)-[:LivesIn]->(c:City)
+RETURN a.name
+HINT a MULTI_JOIN b MULTI_JOIN c
+```

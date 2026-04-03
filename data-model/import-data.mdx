@@ -1,0 +1,278 @@
+---
+title: 'Importing data'
+description: 'How to load data into Kuzu using COPY FROM for bulk imports from CSV, Parquet, JSON, and NPY files, individual CREATE statements, and DataFrames from Python.'
+keywords: ['COPY FROM', 'import', 'CSV', 'Parquet', 'JSON', 'NPY', 'bulk load', 'DataFrame', 'COPY TO', 'export']
+---
+
+Kuzu provides several ways to get data in. Choose the method that fits your source format and volume:
+
+| Method | Best for |
+|--------|----------|
+| `COPY FROM` | Bulk loading from files (CSV, Parquet, JSON, NPY) |
+| `CREATE` | Small inserts or programmatic inserts |
+| DataFrame parameter | Loading from pandas or polars in Python |
+| `COPY TO` | Exporting results to CSV or Parquet |
+
+## Prerequisites
+
+Before loading data you must define the schema. For example:
+
+```cypher
+CREATE NODE TABLE User(name STRING, age INT64, PRIMARY KEY (name))
+CREATE NODE TABLE City(name STRING, population INT64, PRIMARY KEY (name))
+CREATE REL TABLE Follows(FROM User TO User, since INT64)
+CREATE REL TABLE LivesIn(FROM User TO City)
+```
+
+---
+
+## COPY FROM: bulk loading
+
+`COPY FROM` is the fastest way to load large datasets. It reads a file (or a list of files) and inserts all rows into the target table in a single operation.
+
+<Steps>
+
+<Step title="Load nodes from CSV">
+
+```cypher
+COPY User FROM 'user.csv'
+COPY City FROM 'city.csv'
+```
+
+By default Kuzu expects columns in the same order as the table definition, with no header row. To enable header detection (and map columns by name), pass `header=true`:
+
+```cypher
+COPY User FROM 'user.csv' (header=true)
+```
+
+Relationship tables are loaded the same way. The CSV must have source primary key and destination primary key as the first two columns (in `FROM`/`TO` order), followed by any relationship properties:
+
+```cypher
+COPY Follows FROM 'follows.csv'
+COPY LivesIn FROM 'lives-in.csv'
+```
+
+</Step>
+
+<Step title="CSV dialect options">
+
+Use keyword options inside parentheses to control how the file is parsed:
+
+```cypher
+COPY User FROM 'user.csv' (
+  header = true,
+  delim  = '|',
+  quote  = '"',
+  escape = '\\'
+)
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `header` | `false` | Whether the first row is a header |
+| `delim` | `,` | Field delimiter |
+| `quote` | `"` | Quote character |
+| `escape` | `\` | Escape character for special characters inside quoted fields |
+
+You can also skip a number of leading rows with `skip`:
+
+```cypher
+COPY User FROM 'user.csv' (header=true, skip=1)
+```
+
+</Step>
+
+<Step title="Load from multiple files">
+
+Pass a list of file paths to load them all into the same table in one call:
+
+```cypher
+COPY User FROM ['user_part1.csv', 'user_part2.csv']
+```
+
+Glob patterns are also supported:
+
+```cypher
+COPY User FROM 'users_*.csv'
+```
+
+</Step>
+
+<Step title="Load from Parquet">
+
+Kuzu reads Parquet files with automatic type inference — no extra options are required:
+
+```cypher
+COPY User FROM 'user.parquet'
+```
+
+Column types in the Parquet schema are mapped to the target table's declared types. If the Parquet type is compatible but not identical (for example, `FLOAT` vs `DOUBLE`), Kuzu casts the values automatically.
+
+```cypher
+CREATE NODE TABLE Embeddings(id INT64, vec DOUBLE[2], PRIMARY KEY (id))
+COPY Embeddings FROM 'data.parquet'
+```
+
+</Step>
+
+<Step title="Load from JSON">
+
+Kuzu can read newline-delimited JSON (NDJSON) or standard JSON arrays:
+
+```cypher
+COPY User FROM 'user.json'
+```
+
+Each JSON object's field names must match the table's property names. Extra fields are ignored; missing fields are set to `null`.
+
+</Step>
+
+<Step title="Load from NumPy (.npy) files">
+
+For numerical data stored as NumPy arrays, provide a list of `.npy` files — one per column — in the same order as the table definition:
+
+```cypher
+CREATE NODE TABLE Vectors(id INT64, embedding FLOAT[128], PRIMARY KEY (id))
+COPY Vectors FROM [
+  'ids.npy',
+  'embeddings.npy'
+]
+```
+
+<Note>
+NPY loading does not support options other than `IGNORE_ERRORS`. Each file in the list corresponds to one column in the table, in declaration order.
+</Note>
+
+</Step>
+
+</Steps>
+
+---
+
+## Individual inserts with CREATE
+
+For small volumes or when constructing nodes programmatically, use Cypher `CREATE`:
+
+```cypher
+-- Insert individual nodes
+CREATE (:User {name: 'Adam', age: 30})
+CREATE (:User {name: 'Karissa', age: 40})
+CREATE (:City {name: 'Waterloo', population: 150000})
+
+-- Insert a relationship between existing nodes
+MATCH (a:User {name: 'Adam'}), (b:User {name: 'Karissa'})
+CREATE (a)-[:Follows {since: 2020}]->(b)
+```
+
+<Tip>
+`CREATE` executes inside Kuzu's auto-transaction mode. Each statement is committed immediately. For batched inserts, wrap them in an explicit transaction with `BEGIN TRANSACTION` / `COMMIT`.
+</Tip>
+
+---
+
+## Loading DataFrames in Python
+
+<Tabs>
+
+<Tab title="pandas">
+
+Pass a pandas DataFrame directly as a query parameter. Kuzu recognizes DataFrames and scans them in-process without writing to disk.
+
+```python
+import kuzu
+import pandas as pd
+
+db = kuzu.Database('./mydb')
+conn = kuzu.Connection(db)
+
+conn.execute("CREATE NODE TABLE User(name STRING, age INT64, PRIMARY KEY (name))")
+
+df = pd.DataFrame({
+    'name': ['Adam', 'Karissa', 'Zhang', 'Noura'],
+    'age':  [30, 40, 50, 25],
+})
+
+conn.execute("COPY User FROM $df", parameters={'df': df})
+```
+
+</Tab>
+
+<Tab title="polars">
+
+Polars DataFrames are supported in the same way:
+
+```python
+import kuzu
+import polars as pl
+
+db = kuzu.Database('./mydb')
+conn = kuzu.Connection(db)
+
+conn.execute("CREATE NODE TABLE User(name STRING, age INT64, PRIMARY KEY (name))")
+
+df = pl.DataFrame({
+    'name': ['Adam', 'Karissa', 'Zhang', 'Noura'],
+    'age':  [30, 40, 50, 25],
+})
+
+conn.execute("COPY User FROM $df", parameters={'df': df})
+```
+
+</Tab>
+
+</Tabs>
+
+DataFrame columns are matched to table properties by name, so column order in the DataFrame does not need to match the declaration order in the table.
+
+---
+
+## COPY TO: exporting results
+
+Use `COPY TO` to write query results to a file. This is useful for creating derived datasets or sharing subgraphs.
+
+<Tabs>
+
+<Tab title="CSV">
+
+```cypher
+COPY (
+  MATCH (u:User)-[:LivesIn]->(c:City)
+  RETURN u.name AS user, c.name AS city, c.population
+) TO 'output.csv' (header=true)
+```
+
+</Tab>
+
+<Tab title="Parquet">
+
+```cypher
+COPY (
+  MATCH (p:User) RETURN p.*
+) TO 'users.parquet'
+```
+
+</Tab>
+
+</Tabs>
+
+The subquery inside `COPY TO` can be any valid `MATCH … RETURN` expression, including multi-hop patterns, aggregations, and computed columns.
+
+---
+
+## Handling errors
+
+By default, `COPY FROM` aborts and rolls back the entire operation on the first error (for example, a duplicate primary key). To skip bad rows instead, use `IGNORE_ERRORS=true`:
+
+```cypher
+COPY User FROM 'user.csv' (IGNORE_ERRORS=true)
+```
+
+After the load, inspect skipped rows:
+
+```cypher
+CALL show_warnings() RETURN message
+```
+
+<Warning>
+`IGNORE_ERRORS` silently skips rows that violate constraints or fail type casting. Always check `show_warnings()` after a load to confirm the data looks as expected.
+</Warning>

@@ -1,0 +1,283 @@
+---
+title: "Cypher overview"
+description: "Introduction to the Cypher query language in Kuzu — syntax, query structure, transactions, and how Kuzu extends the openCypher standard."
+---
+
+Cypher is a declarative graph query language designed for property graph databases. Kuzu implements a superset of the [openCypher specification](https://opencypher.org/), adding extensions for bulk data loading, DDL (schema definition), path algorithms, and more.
+
+<CardGroup cols={2}>
+  <Card title="Data definition (DDL)" icon="table" href="/reference/data-definition">
+    CREATE, DROP, and ALTER tables; COPY FROM/TO
+  </Card>
+  <Card title="Querying" icon="magnifying-glass" href="/reference/querying">
+    MATCH, WHERE, RETURN, WITH, aggregation, path patterns
+  </Card>
+  <Card title="Built-in functions" icon="function" href="/reference/functions">
+    String, math, list, date/time, and type-conversion functions
+  </Card>
+</CardGroup>
+
+---
+
+## Pattern syntax
+
+Patterns are the core building block of Cypher. They describe graph shapes using a visual ASCII-art notation.
+
+### Node patterns
+
+```cypher
+()                        -- anonymous node, any label
+(n)                       -- bound to variable n
+(n:User)                  -- node with label User
+(n:User {name: 'Alice'})  -- node with property filter
+(n:User:Admin)            -- node with multiple labels (OR semantics)
+```
+
+### Relationship patterns
+
+```cypher
+-[:Follows]->             -- directed, type Follows
+<-[:Follows]-             -- directed (reverse)
+-[:Follows]-              -- undirected
+-[:Follows|:Likes]->      -- multiple types (OR semantics)
+-[e:Follows {since: 2020}]-> -- with property filter, bound to e
+```
+
+### Variable-length paths
+
+```cypher
+-[:Follows*1..3]->        -- 1 to 3 hops
+-[:Follows*]->            -- any number of hops (use with caution)
+-[* SHORTEST 1..5]->      -- shortest path, up to 5 hops
+-[* ALL SHORTEST 1..5]->  -- all shortest paths
+-[* WSHORTEST (e) 1..10]-> -- weighted shortest path
+-[* TRAIL]->              -- trail (no repeated edges)
+-[* ACYCLIC]->            -- acyclic path (no repeated nodes)
+```
+
+---
+
+## Query structure
+
+A Kuzu query follows the general form:
+
+```cypher
+[READING_CLAUSES]
+[UPDATING_CLAUSES]
+RETURN ...
+```
+
+Multiple query parts can be chained with `WITH`:
+
+```cypher
+MATCH (u:User)
+WITH u, u.age AS age
+WHERE age > 30
+RETURN u.name, age
+ORDER BY age DESC
+LIMIT 10
+```
+
+### Clause ordering rules
+
+| Clause | Role |
+|---|---|
+| `MATCH` | Read graph patterns |
+| `OPTIONAL MATCH` | Left outer join on a pattern |
+| `WHERE` | Filter rows |
+| `WITH` | Project and pass results to the next query part |
+| `RETURN` | Output results |
+| `ORDER BY` | Sort output |
+| `SKIP` / `LIMIT` | Paginate output |
+| `UNWIND` | Expand a list into rows |
+| `CREATE` | Insert nodes and relationships |
+| `MERGE` | Upsert nodes and relationships |
+| `SET` | Update properties |
+| `DELETE` / `DETACH DELETE` | Remove nodes or relationships |
+| `UNION` / `UNION ALL` | Combine results of multiple queries |
+
+---
+
+## UNION
+
+Combine result sets from multiple queries. Column names and types must match.
+
+```cypher
+-- UNION deduplicates; UNION ALL keeps all rows
+MATCH (u:User)-[:LivesIn]->(c:City {name: 'Waterloo'})
+RETURN u.name
+UNION ALL
+MATCH (u:User)-[:LivesIn]->(c:City {name: 'Kitchener'})
+RETURN u.name
+```
+
+---
+
+## Expressions
+
+Cypher expressions include literals, variables, property access, function calls, and operators.
+
+### Literals
+
+```cypher
+42          -- integer
+3.14        -- float
+'hello'     -- string (single or double quotes)
+true        -- boolean
+null        -- null
+[1, 2, 3]   -- list
+{key: val}  -- struct/map literal
+date('2024-01-01')
+timestamp('2024-01-01 12:00:00')
+interval('1 year 3 months')
+```
+
+### Operators
+
+| Category | Operators |
+|---|---|
+| Comparison | `=`, `<>`, `<`, `<=`, `>`, `>=` |
+| Logical | `AND`, `OR`, `XOR`, `NOT` |
+| Arithmetic | `+`, `-`, `*`, `/`, `%`, `^` |
+| Bitwise | `&`, `\|`, `>>`, `<<` |
+| String | `STARTS WITH`, `ENDS WITH`, `CONTAINS`, `=~` (regex) |
+| Null | `IS NULL`, `IS NOT NULL` |
+| List | `IN`, `[i]`, `[start..end]` |
+| Concatenation | `+` (strings and lists) |
+
+### CASE expressions
+
+```cypher
+-- Simple form
+CASE n.status
+  WHEN 'active' THEN 'yes'
+  WHEN 'inactive' THEN 'no'
+  ELSE 'unknown'
+END
+
+-- General form
+CASE
+  WHEN n.age < 18 THEN 'minor'
+  WHEN n.age < 65 THEN 'adult'
+  ELSE 'senior'
+END
+```
+
+### Quantifier expressions
+
+```cypher
+ALL(x IN list WHERE x > 0)
+ANY(x IN list WHERE x > 0)
+NONE(x IN list WHERE x > 0)
+SINGLE(x IN list WHERE x > 0)
+```
+
+---
+
+## Subqueries
+
+### EXISTS subquery
+
+Returns `true` if the subpattern has at least one result:
+
+```cypher
+MATCH (u:User)
+WHERE EXISTS { MATCH (u)-[:Follows*3..3]->(b:User) }
+RETURN u.name
+```
+
+### COUNT subquery
+
+Counts matching rows inline:
+
+```cypher
+MATCH (u:User)
+RETURN u.name, COUNT { MATCH (u)<-[:Follows]-(b:User) } AS followers
+```
+
+---
+
+## Parameters
+
+Parameterized queries use `$` prefix:
+
+```cypher
+MATCH (u:User {name: $name})
+RETURN u.age
+```
+
+---
+
+## Comments
+
+```cypher
+// Single-line comment
+/* Multi-line
+   comment */
+```
+
+---
+
+## Transaction model
+
+Kuzu uses an **auto-commit** model by default: every statement that is not inside an explicit transaction block is automatically committed.
+
+### Explicit transactions
+
+```cypher
+BEGIN TRANSACTION
+-- one or more statements
+COMMIT
+
+-- or discard changes:
+BEGIN TRANSACTION
+ROLLBACK
+
+-- read-only transaction (no writes allowed):
+BEGIN TRANSACTION READ ONLY
+COMMIT
+```
+
+### Checkpointing
+
+```cypher
+CHECKPOINT
+```
+
+Forces a checkpoint, flushing in-memory data to disk.
+
+---
+
+## Query plan inspection
+
+```cypher
+EXPLAIN MATCH (u:User)-[:Follows]->(v:User) RETURN u.name, v.name
+EXPLAIN LOGICAL MATCH (u:User)-[:Follows]->(v:User) RETURN u.name, v.name
+PROFILE MATCH (u:User)-[:Follows]->(v:User) RETURN u.name, v.name
+```
+
+- `EXPLAIN` — shows the physical query plan without executing the query.
+- `EXPLAIN LOGICAL` — shows the logical query plan.
+- `PROFILE` — executes the query and annotates the plan with runtime metrics.
+
+---
+
+## Kuzu vs. standard openCypher
+
+| Feature | openCypher | Kuzu |
+|---|---|---|
+| `CREATE NODE TABLE` | Not in spec | Supported |
+| `CREATE REL TABLE` | Not in spec | Supported |
+| `COPY FROM` | Not in spec | Supported |
+| Variable-length paths | Supported | Supported + SHORTEST / ALL SHORTEST / WSHORTEST |
+| `EXISTS` subquery | Supported | Supported |
+| `COUNT` subquery | Not in spec | Supported |
+| `CALL` (table functions) | Not in spec | Supported |
+| `LOAD FROM` | Not in spec | Supported |
+| `UNION` / `UNION ALL` | Supported | Supported |
+| Recursive comprehensions | Not in spec | Supported (`(r, n \| WHERE ... \| {props})`) |
+| `!=` operator | Not in spec | Raises error — use `<>` |
+
+<Note>
+Kuzu uses `<>` for inequality, following the openCypher specification. The `!=` operator will raise a parse error.
+</Note>

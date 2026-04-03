@@ -1,0 +1,125 @@
+---
+title: "Introduction"
+description: "Kuzu is an embedded property graph database built for query speed and scalability. Run it in-process with your application — no server required."
+keywords: ["graph database", "embedded", "property graph", "Cypher", "Kuzu"]
+---
+
+Kuzu is an embedded property graph database designed for high-performance analytical workloads on graph-structured data. It runs in-process alongside your application — no separate server, no network overhead — and is queried using the Cypher query language.
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Build and query your first graph in minutes using Python
+  </Card>
+  <Card title="Installation" icon="download" href="/installation">
+    Install Kuzu for Python, Node.js, Java, Rust, C/C++, or WebAssembly
+  </Card>
+</CardGroup>
+
+## What is Kuzu?
+
+Kuzu stores data as a **property graph**: a set of nodes and directed relationships, each carrying typed key-value properties. You query this graph with **Cypher**, the industry-standard declarative graph query language.
+
+Because Kuzu is embedded, it links directly into your process the same way SQLite links into an application. There is no daemon to run, no connection string to configure, and no separate deployment to manage. You open a database path, create a connection, and start querying.
+
+```python
+import kuzu
+
+db = kuzu.Database("./my_graph")
+conn = kuzu.Connection(db)
+
+conn.execute("CREATE NODE TABLE User(name STRING, age INT64, PRIMARY KEY (name))")
+conn.execute("CREATE (:User {name: 'Alice', age: 30})")
+
+result = conn.execute("MATCH (u:User) RETURN u.name, u.age")
+while result.has_next():
+    print(result.get_next())
+```
+
+## Key features
+
+<CardGroup cols={2}>
+  <Card title="Property graph data model" icon="diagram-project">
+    Model your domain as nodes and directed relationships, each with typed properties and a primary key.
+  </Card>
+  <Card title="Cypher query language" icon="brackets-curly">
+    Express complex graph traversals, pattern matches, and aggregations using standard Cypher syntax.
+  </Card>
+  <Card title="Embedded and serverless" icon="microchip">
+    Kuzu runs in-process with your application. No server process, no network round-trips, no operational overhead.
+  </Card>
+  <Card title="Full-text search" icon="magnifying-glass">
+    Native full-text search index over node and relationship properties, available via the `fts` extension.
+  </Card>
+  <Card title="Vector index" icon="waveform-lines">
+    Store and query high-dimensional embeddings directly in the graph using the built-in `vector` extension.
+  </Card>
+  <Card title="Columnar disk-based storage" icon="database">
+    Data is stored column-by-column on disk, enabling efficient analytical scans without loading entire rows.
+  </Card>
+  <Card title="CSR adjacency list indices" icon="share-nodes">
+    Compressed sparse row (CSR) structures accelerate graph traversals and join-heavy Cypher queries.
+  </Card>
+  <Card title="Vectorized query processor" icon="bolt">
+    Queries execute over batches of values using SIMD-friendly vectorized and factorized evaluation.
+  </Card>
+  <Card title="ACID transactions" icon="shield-check">
+    Serializable ACID transactions with write-ahead logging protect your data from corruption or partial writes.
+  </Card>
+  <Card title="Multi-core parallelism" icon="server">
+    Long-running analytical queries automatically exploit multiple CPU cores without any configuration.
+  </Card>
+  <Card title="WebAssembly support" icon="globe">
+    Kuzu compiles to WebAssembly, letting you run graph queries in the browser via `@kuzu/kuzu-wasm`.
+  </Card>
+  <Card title="Multi-language APIs" icon="layer-group">
+    First-class client libraries for Python, Node.js, Java, Rust, C, C++, and WebAssembly.
+  </Card>
+</CardGroup>
+
+## When to use Kuzu
+
+Kuzu is a strong fit for workloads that are naturally graph-shaped and benefit from running close to application code.
+
+**Graph analytics** — Kuzu's columnar storage and vectorized query processor handle large analytical graph queries efficiently. PageRank, community detection, and path-finding can all be expressed in Cypher and accelerated by the `algo` extension.
+
+**Knowledge graphs** — Build knowledge graphs that live alongside your Python or Node.js code. Entities and their relationships are first-class citizens, and Cypher lets you traverse multi-hop connections without complex SQL joins.
+
+**Recommendation systems** — Collaborative filtering and item-similarity patterns map directly onto graph traversals. Kuzu's CSR indices make these traversals fast even on large graphs.
+
+**Fraud detection** — Graph patterns such as shared accounts, ring structures, and unusual relationship chains are easy to express and detect in Cypher.
+
+**Graph machine learning** — Kuzu integrates with [PyTorch Geometric](https://pytorch-geometric.readthedocs.io/) as a remote backend, letting you train GNNs directly over data stored in Kuzu without materializing the entire graph in memory.
+
+```python
+# Use Kuzu as a PyTorch Geometric remote backend
+feature_store, graph_store = db.get_torch_geometric_remote_backend(num_threads=4)
+```
+
+## Architecture overview
+
+Kuzu is an **in-process** database. The library links directly into the host process, sharing the same address space. Queries run in the same threads as your application, eliminating serialization and network overhead.
+
+Storage is **columnar and disk-based**. Each property column is stored and compressed independently, which means analytical scans read only the columns they need. Graph topology is stored using **CSR adjacency list indices**, which pack neighbor lists into a compact format that enables cache-friendly traversal.
+
+The query processor is **vectorized and factorized**. Rather than evaluating one tuple at a time, the engine processes batches of values (vectors) and exploits factorized intermediate representations to avoid redundant work in multi-hop joins.
+
+Queries that touch independent data partitions are executed in **parallel across multiple CPU cores** automatically.
+
+## Extensions
+
+Kuzu ships with a built-in extension framework. As of v0.11.3, four extensions are pre-installed and ready to use without any manual installation:
+
+| Extension | Purpose |
+|-----------|---------|
+| `algo` | Graph algorithms: PageRank, connected components, community detection |
+| `fts` | Full-text search index over node and relationship properties |
+| `json` | Read and write JSON data |
+| `vector` | Vector similarity index for embedding-based retrieval |
+
+<Note>
+  If you are running a version earlier than v0.11.3, extensions must be installed from a local extension server. See the [extensions overview](/extensions/overview) for setup instructions.
+</Note>
+
+## License
+
+Kuzu is available under the [MIT License](https://github.com/kuzudb/kuzu/blob/master/LICENSE).

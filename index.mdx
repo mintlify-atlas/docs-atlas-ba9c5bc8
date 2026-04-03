@@ -1,97 +1,108 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "Kuzu — Embedded Graph Database"
+description: "An embeddable, serverless property graph database built for speed. Query your graph data with Cypher, powered by native full-text search and vector indexing."
 ---
 
-## Setting up
+Kuzu is an embedded property graph database designed for high-performance analytical workloads on graph-structured data. It runs inside your application — no separate server required — and is queried using the Cypher query language.
 
-Get your documentation site up and running in minutes.
-
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
-
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Build and query your first graph database in minutes
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Installation" icon="download" href="/installation">
+    Install Kuzu for Python, Node.js, Java, Rust, or C/C++
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="Data Model" icon="diagram-project" href="/data-model/property-graph">
+    Learn the property graph model and Cypher query language
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="Client APIs" icon="code" href="/client-apis/python">
+    Explore language-specific APIs for Python, Node.js, Java, Rust, and more
   </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## Why Kuzu?
 
-Everything you need to create world-class documentation.
+Kuzu is built for developers who need fast, scalable graph queries embedded directly in their applications.
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
+<CardGroup cols={2}>
+  <Card title="Truly embedded" icon="microchip">
+    No network round-trips, no separate server process. Kuzu runs in-process alongside your application code.
   </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
+  <Card title="Cypher query language" icon="brackets-curly">
+    Use the industry-standard Cypher language to express complex graph traversals and pattern matches.
   </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
+  <Card title="Full-text and vector search" icon="magnifying-glass">
+    Native FTS and vector indexing are built in — not bolted on — for retrieval-augmented workflows.
   </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
+  <Card title="Multi-language support" icon="layer-group">
+    First-class APIs for Python, Node.js, Java, Rust, C, C++, and WebAssembly.
   </Card>
-</Columns>
+</CardGroup>
 
-## Need inspiration?
+## Get started in 3 steps
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+<Steps>
+  <Step title="Install Kuzu">
+    Install the Kuzu package for your language of choice.
+
+    <CodeGroup>
+    ```bash Python
+    pip install kuzu
+    ```
+
+    ```bash Node.js
+    npm install kuzu
+    ```
+    </CodeGroup>
+  </Step>
+  <Step title="Create a database and define your schema">
+    Open a database, connect, and create node and relationship tables using Cypher DDL.
+
+    ```python
+    import kuzu
+
+    db = kuzu.Database("./my_graph")
+    conn = kuzu.Connection(db)
+
+    conn.execute("CREATE NODE TABLE User(name STRING, age INT64, PRIMARY KEY (name))")
+    conn.execute("CREATE REL TABLE Follows(FROM User TO User, since INT64)")
+    ```
+  </Step>
+  <Step title="Load data and run queries">
+    Insert or bulk-load data, then query with Cypher.
+
+    ```python
+    conn.execute("CREATE (:User {name: 'Alice', age: 30})")
+    conn.execute("CREATE (:User {name: 'Bob', age: 25})")
+    conn.execute(
+        "MATCH (a:User {name: 'Alice'}), (b:User {name: 'Bob'}) "
+        "CREATE (a)-[:Follows {since: 2023}]->(b)"
+    )
+
+    result = conn.execute(
+        "MATCH (a:User)-[:Follows]->(b:User) RETURN a.name, b.name"
+    )
+    while result.has_next():
+        print(result.get_next())
+    ```
+  </Step>
+</Steps>
+
+## Explore extensions
+
+Kuzu's extension system lets you load additional capabilities at runtime, including graph algorithms, full-text search, vector similarity search, and connectors for external data sources.
+
+<CardGroup cols={2}>
+  <Card title="Full-text search" icon="file-magnifying-glass" href="/extensions/full-text-search">
+    Index and search text properties across your graph nodes
+  </Card>
+  <Card title="Vector search" icon="waveform-lines" href="/extensions/vector-search">
+    Run similarity searches over high-dimensional embeddings stored in the graph
+  </Card>
+  <Card title="Graph algorithms" icon="chart-network" href="/extensions/graph-algorithms">
+    Run PageRank, community detection, connected components, and more
+  </Card>
+  <Card title="All extensions" icon="puzzle-piece" href="/extensions/overview">
+    Browse the full list of available extensions
+  </Card>
+</CardGroup>

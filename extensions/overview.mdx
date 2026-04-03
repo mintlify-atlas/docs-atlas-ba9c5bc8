@@ -1,0 +1,137 @@
+---
+title: "Extensions overview"
+description: "Extend Kuzu with additional functionality for graph algorithms, full-text search, vector similarity search, external database connectivity, and more."
+keywords: ["extensions", "install", "load", "algo", "fts", "vector", "json", "httpfs", "duckdb", "postgres"]
+---
+
+Extensions let you add capabilities to Kuzu that are not part of the core engine. Each extension is a self-contained module that registers new functions, indexes, or data source connectors when loaded.
+
+## Pre-installed extensions
+
+Starting with **v0.11.3**, the following extensions ship with every Kuzu binary and do not require a separate download:
+
+| Extension | Description |
+|-----------|-------------|
+| `algo`    | Graph algorithms: PageRank, weakly/strongly connected components, Louvain community detection, k-core decomposition, spanning forest |
+| `fts`     | BM25-based full-text search indexing and querying across multiple string columns |
+| `json`    | JSON parsing, construction, and manipulation functions |
+| `vector`  | HNSW-based approximate nearest-neighbor vector similarity search |
+
+Even though these extensions are bundled, you still need to load them before use:
+
+```cypher
+LOAD EXTENSION fts;
+LOAD EXTENSION vector;
+LOAD EXTENSION algo;
+LOAD EXTENSION json;
+```
+
+## Manually installed extensions
+
+Extensions not bundled with the binary must be installed from an extension repository before loading. The official Kuzu extension repository requires network access. For air-gapped environments, you can run a local mirror.
+
+### Installing from the official repository
+
+```cypher
+INSTALL httpfs;
+LOAD EXTENSION httpfs;
+```
+
+### Installing with a custom repository URL
+
+Use the `FROM` clause to specify the repository host:
+
+```cypher
+INSTALL fts FROM 'http://localhost:8080/';
+LOAD EXTENSION fts;
+```
+
+To force a reinstall of an already-installed extension, prefix with `FORCE`:
+
+```cypher
+FORCE INSTALL fts FROM 'http://localhost:8080/';
+```
+
+### Setting up a local extension server
+
+For offline environments or reproducible builds, run the official extension repository Docker image:
+
+<Steps>
+  <Step title="Pull the image">
+    ```bash
+    docker pull ghcr.io/kuzudb/extension-repo:latest
+    ```
+  </Step>
+  <Step title="Run the server">
+    ```bash
+    docker run -p 8080:80 ghcr.io/kuzudb/extension-repo:latest
+    ```
+  </Step>
+  <Step title="Install and load an extension">
+    ```cypher
+    INSTALL fts FROM 'http://localhost:8080/';
+    LOAD EXTENSION fts;
+    ```
+  </Step>
+</Steps>
+
+## Available extensions
+
+<CardGroup cols={2}>
+  <Card title="algo" icon="diagram-project">
+    Graph algorithms including PageRank, weakly and strongly connected components, Louvain community detection, k-core decomposition, and spanning forest. Pre-installed in v0.11.3+.
+  </Card>
+  <Card title="fts" icon="magnifying-glass">
+    Full-text search using the BM25 ranking model. Supports multiple stemmers, stop words, and conjunctive/disjunctive query modes. Pre-installed in v0.11.3+.
+  </Card>
+  <Card title="vector" icon="layer-group">
+    Approximate nearest-neighbor search using an HNSW index. Supports cosine, L2, L2-squared, and dot product distance metrics. Pre-installed in v0.11.3+.
+  </Card>
+  <Card title="json" icon="brackets-curly">
+    Functions for parsing, constructing, querying, and transforming JSON values. Pre-installed in v0.11.3+.
+  </Card>
+  <Card title="httpfs" icon="cloud">
+    Read and write files over HTTP, HTTPS, Amazon S3, and Google Cloud Storage.
+  </Card>
+  <Card title="duckdb" icon="database">
+    Query DuckDB database files directly from within Kuzu using a foreign database connection.
+  </Card>
+  <Card title="postgres" icon="database">
+    Connect to a PostgreSQL database and scan its tables as if they were local Kuzu tables.
+  </Card>
+  <Card title="sqlite" icon="database">
+    Connect to a SQLite database file and scan its tables.
+  </Card>
+  <Card title="delta" icon="table">
+    Read Delta Lake tables stored on local disk or object storage.
+  </Card>
+  <Card title="iceberg" icon="table">
+    Read Apache Iceberg tables stored on local disk or object storage.
+  </Card>
+  <Card title="neo4j" icon="circle-nodes">
+    Migrate graph data from an existing Neo4j database into Kuzu.
+  </Card>
+  <Card title="azure" icon="cloud">
+    Read and write files stored in Azure Blob Storage.
+  </Card>
+  <Card title="llm" icon="microchip">
+    Integration functions for calling large language model APIs from within a Cypher query.
+  </Card>
+  <Card title="unity_catalog" icon="table">
+    Access tables registered in a Unity Catalog metastore.
+  </Card>
+</CardGroup>
+
+## Inspecting loaded extensions
+
+To see which extensions are currently loaded in the active session:
+
+```cypher
+CALL SHOW_LOADED_EXTENSIONS() RETURN *;
+```
+
+To list all indexes created by loaded extensions:
+
+```cypher
+CALL SHOW_INDEXES() RETURN *;
+```

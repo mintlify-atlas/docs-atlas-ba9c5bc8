@@ -1,0 +1,304 @@
+---
+title: 'Cypher basics'
+description: 'A practical guide to writing Cypher queries in Kuzu: pattern matching, filtering, writing data, aggregation, and advanced clauses.'
+keywords: ['cypher', 'MATCH', 'CREATE', 'MERGE', 'WHERE', 'RETURN', 'WITH', 'UNWIND', 'aggregation', 'variable-length path']
+---
+
+Kuzu uses **Cypher** as its query language. Cypher describes graph patterns visually using ASCII-art syntax: nodes are written as `(n)` and relationships as `-[r]->`.
+
+The examples on this page use the demo-db schema:
+
+```cypher
+CREATE NODE TABLE User(name STRING, age INT64, PRIMARY KEY (name))
+CREATE NODE TABLE City(name STRING, population INT64, PRIMARY KEY (name))
+CREATE REL TABLE Follows(FROM User TO User, since INT64)
+CREATE REL TABLE LivesIn(FROM User TO City)
+```
+
+<AccordionGroup>
+
+<Accordion title="Reading data: MATCH, WHERE, RETURN">
+
+### MATCH
+
+`MATCH` finds subgraphs that fit a pattern. Variables bound in a `MATCH` clause are available in subsequent clauses.
+
+```cypher
+-- All users
+MATCH (u:User) RETURN u.name, u.age
+
+-- All cities with a population over 100 000
+MATCH (c:City)
+WHERE c.population > 100000
+RETURN c.name, c.population
+```
+
+### Path patterns
+
+Describe multi-hop traversals by chaining node and relationship patterns:
+
+```cypher
+-- Users who follow each other
+MATCH (a:User)-[:Follows]->(b:User)
+RETURN a.name AS follower, b.name AS followee
+
+-- Users and the city they live in
+MATCH (u:User)-[:LivesIn]->(c:City)
+RETURN u.name, c.name
+
+-- Two-hop: friends of friends
+MATCH (a:User)-[:Follows]->(b:User)-[:Follows]->(c:User)
+RETURN a.name, c.name
+```
+
+### WHERE
+
+Filter results using boolean expressions. WHERE supports comparisons, `AND`, `OR`, `NOT`, `IN`, `IS NULL`, `IS NOT NULL`, and string functions.
+
+```cypher
+MATCH (u:User)
+WHERE u.age >= 30 AND u.age < 50
+RETURN u.name, u.age
+
+MATCH (u:User)
+WHERE u.name IN ['Adam', 'Karissa', 'Zhang']
+RETURN u.name
+```
+
+### RETURN, ORDER BY, LIMIT, SKIP
+
+```cypher
+-- Return with aliasing
+MATCH (u:User)-[:LivesIn]->(c:City)
+RETURN u.name AS user, c.name AS city
+
+-- Sort and paginate
+MATCH (u:User)
+RETURN u.name, u.age
+ORDER BY u.age DESC
+LIMIT 3
+
+-- Skip the first 2 rows
+MATCH (u:User)
+RETURN u.name
+ORDER BY u.name
+SKIP 2
+LIMIT 5
+```
+
+### OPTIONAL MATCH
+
+`OPTIONAL MATCH` works like a left outer join: if no match is found for the optional pattern, the unbound variables are `null`.
+
+```cypher
+MATCH (u:User)
+OPTIONAL MATCH (u)-[:LivesIn]->(c:City)
+RETURN u.name, c.name
+```
+
+Users with no `LivesIn` relationship will appear with `c.name = null`.
+
+</Accordion>
+
+<Accordion title="Variable-length paths">
+
+Use `*min..max` after the relationship type to match paths of varying length.
+
+```cypher
+-- Follows chains of length 1 to 3
+MATCH (a:User)-[:Follows*1..3]->(b:User)
+RETURN a.name, b.name
+
+-- All reachable users (no upper bound — use with care on large graphs)
+MATCH (a:User)-[:Follows*1..]->(b:User)
+WHERE a.name = 'Adam'
+RETURN b.name
+```
+
+Bind the entire matched path to a variable to inspect nodes and relationships along it:
+
+```cypher
+MATCH p = (a:User)-[:Follows*1..2]->(b:User)
+WHERE a.name = 'Adam'
+RETURN nodes(p), relationships(p)
+```
+
+`nodes(p)` returns the list of nodes on the path; `relationships(p)` returns the list of relationships.
+
+</Accordion>
+
+<Accordion title="Writing data: CREATE, MERGE, SET, DELETE">
+
+### CREATE
+
+Insert new nodes or relationships. Properties are provided as a map literal.
+
+```cypher
+-- Insert a node
+CREATE (:User {name: 'Noura', age: 25})
+
+-- Insert a relationship between two existing nodes
+MATCH (a:User), (b:User)
+WHERE a.name = 'Zhang' AND b.name = 'Noura'
+CREATE (a)-[:Follows {since: 2022}]->(b)
+```
+
+### MERGE
+
+`MERGE` matches a pattern if it exists, or creates it if it does not. Use `ON CREATE SET` and `ON MATCH SET` to handle each case:
+
+```cypher
+MERGE (u:User {name: 'Noura'})
+ON CREATE SET u.age = 25
+ON MATCH SET u.age = u.age + 1
+RETURN u.name, u.age
+```
+
+### SET
+
+Update properties on matched nodes or relationships:
+
+```cypher
+MATCH (u:User)
+WHERE u.name = 'Adam'
+SET u.age = 31
+```
+
+Update multiple properties in one `SET`:
+
+```cypher
+MATCH (u:User {name: 'Adam'})
+SET u.age = 31, u.name = 'Adam Smith'
+```
+
+### DELETE
+
+Delete matched nodes or relationships. You must delete all relationships connected to a node before deleting the node itself:
+
+```cypher
+-- Delete a relationship
+MATCH (a:User)-[r:Follows]->(b:User)
+WHERE a.name = 'Adam' AND b.name = 'Karissa'
+DELETE r
+
+-- Delete a node (no relationships may remain)
+MATCH (u:User {name: 'Noura'})
+DELETE u
+```
+
+</Accordion>
+
+<Accordion title="Query chaining: WITH">
+
+`WITH` passes results from one query part to the next, optionally filtering or transforming them. It is required when you want to aggregate and then continue querying.
+
+```cypher
+-- Count followers per user, then keep only users with more than 1 follower
+MATCH (b:User)<-[:Follows]-(a:User)
+WITH b.name AS name, COUNT(a) AS followerCount
+WHERE followerCount > 1
+RETURN name, followerCount
+ORDER BY followerCount DESC
+```
+
+`WITH` can also introduce new computed values:
+
+```cypher
+MATCH (u:User)-[:LivesIn]->(c:City)
+WITH u, c, c.population / 1000.0 AS popK
+RETURN u.name, c.name, popK
+```
+
+</Accordion>
+
+<Accordion title="List expansion: UNWIND">
+
+`UNWIND` expands a list into individual rows, one row per element.
+
+```cypher
+-- Expand a literal list
+UNWIND [1, 2, 3, 4] AS x
+RETURN x
+
+-- Expand a list property
+MATCH (u:User)
+WHERE u.name = 'Alice'
+UNWIND u.workedHours AS hour
+RETURN hour
+
+-- Combine with MATCH to fanout collected results
+MATCH (u:User)
+WITH collect(u) AS users
+UNWIND users AS u
+RETURN u.name, u.age
+```
+
+Nested UNWIND is supported — each subsequent `UNWIND` produces a Cartesian product of rows:
+
+```cypher
+UNWIND [1, 2, 3] AS x
+UNWIND [5, 6, 7] AS y
+RETURN x, y
+```
+
+</Accordion>
+
+<Accordion title="Aggregation">
+
+Aggregation functions collapse groups of rows into a single value. Any variable not inside an aggregation function becomes an implicit grouping key.
+
+| Function | Description |
+|----------|-------------|
+| `COUNT(*)` | Count rows |
+| `COUNT(expr)` | Count non-null values |
+| `SUM(expr)` | Sum of values |
+| `AVG(expr)` | Average |
+| `MIN(expr)` | Minimum |
+| `MAX(expr)` | Maximum |
+| `COLLECT(expr)` | Gather values into a list |
+
+```cypher
+-- Number of users per city
+MATCH (u:User)-[:LivesIn]->(c:City)
+RETURN c.name, COUNT(u) AS userCount
+
+-- Average age per city
+MATCH (u:User)-[:LivesIn]->(c:City)
+RETURN c.name, AVG(u.age) AS avgAge
+
+-- Collect all follower names for each user
+MATCH (b:User)<-[:Follows]-(a:User)
+RETURN b.name, COLLECT(a.name) AS followers
+
+-- Total and average age across all users
+MATCH (u:User)
+RETURN COUNT(*) AS total, SUM(u.age) AS totalAge, AVG(u.age) AS avgAge
+```
+
+Use `DISTINCT` inside an aggregation to remove duplicates before aggregating:
+
+```cypher
+MATCH (u:User)-[:Follows]->(b:User)
+RETURN COUNT(DISTINCT b.name) AS uniqueFollowees
+```
+
+</Accordion>
+
+</AccordionGroup>
+
+## Quick reference
+
+| Clause | Purpose |
+|--------|---------|
+| `MATCH` | Find patterns in the graph |
+| `OPTIONAL MATCH` | Left-outer-join match |
+| `WHERE` | Filter rows |
+| `RETURN` | Project output columns |
+| `ORDER BY` | Sort results |
+| `LIMIT` / `SKIP` | Paginate results |
+| `CREATE` | Insert nodes or relationships |
+| `MERGE` | Upsert nodes or relationships |
+| `SET` | Update properties |
+| `DELETE` | Remove nodes or relationships |
+| `WITH` | Chain query parts |
+| `UNWIND` | Expand a list into rows |

@@ -1,0 +1,135 @@
+---
+title: 'Property graph model'
+description: 'How Kuzu organizes data as nodes and relationships in a property graph, and how to define tables for each.'
+keywords: ['property graph', 'node table', 'relationship table', 'schema', 'primary key', 'CREATE NODE TABLE', 'CREATE REL TABLE']
+---
+
+Kuzu stores data as a **property graph**: a collection of nodes (vertices) and relationships (edges), where each node and relationship can carry named properties.
+
+<CardGroup cols={2}>
+  <Card title="Nodes" icon="circle">
+    Represent entities such as users, cities, or products. Each node belongs to exactly one label (table) and has a set of typed properties.
+  </Card>
+  <Card title="Relationships" icon="arrow-right">
+    Connect a source node to a destination node. Each relationship belongs to one type (table) and can also carry properties.
+  </Card>
+  <Card title="Labels / types" icon="tag">
+    Every node table and relationship table has a name that acts as its label or type. Labels are used in Cypher patterns to filter which nodes or relationships to match.
+  </Card>
+  <Card title="Properties" icon="list">
+    Key-value pairs attached to nodes or relationships. Properties are declared in the table schema and are strongly typed.
+  </Card>
+</CardGroup>
+
+## Node tables
+
+A **node table** defines the schema for a set of nodes that share the same label and properties. Every node table requires a primary key — a property whose value is unique across all nodes in that table.
+
+```cypher
+CREATE NODE TABLE User(name STRING, age INT64, PRIMARY KEY (name))
+CREATE NODE TABLE City(name STRING, population INT64, PRIMARY KEY (name))
+```
+
+<Note>
+Every node table must declare a `PRIMARY KEY`. Kuzu uses the primary key to build an index for fast lookups and to identify the endpoints of relationships. Attempting to insert two nodes with the same primary key value will raise a constraint violation error.
+</Note>
+
+### Schema rules
+
+- Column names and types are declared inline: `propName TYPE`.
+- The `PRIMARY KEY` clause names one (and only one) property to use as the key.
+- Valid key types include any scalar type that supports equality: `INT64`, `INT32`, `INT16`, `INT8`, `UINT64`–`UINT8`, `STRING`, `DATE`, `TIMESTAMP`, `UUID`, and `SERIAL`.
+- Properties are nullable by default; the primary key column is never null.
+
+### SERIAL primary keys
+
+If you do not have a natural key, use `SERIAL` to get an auto-incrementing integer assigned by Kuzu on every insert:
+
+```cypher
+CREATE NODE TABLE Product(id SERIAL, name STRING, price DOUBLE, PRIMARY KEY (id))
+```
+
+## Relationship tables
+
+A **relationship table** connects nodes from one table to nodes in another (or the same) table. Relationships are directed: they have a source (`FROM`) and a destination (`TO`).
+
+```cypher
+CREATE REL TABLE Follows(FROM User TO User, since INT64)
+CREATE REL TABLE LivesIn(FROM User TO City)
+```
+
+A relationship table can have properties (like `since` above) or none at all.
+
+### Directionality
+
+Relationships are stored as directed edges. You can still query them in both directions in Cypher:
+
+```cypher
+-- traverse forward
+MATCH (a:User)-[:Follows]->(b:User) RETURN a.name, b.name
+
+-- traverse backward
+MATCH (a:User)<-[:Follows]-(b:User) RETURN a.name, b.name
+
+-- traverse either direction
+MATCH (a:User)-[:Follows]-(b:User) RETURN a.name, b.name
+```
+
+### One table per relationship type
+
+Each relationship table defines exactly one relationship type. If you need multiple source-destination combinations for the same relationship concept, create separate tables — or use the multi-`FROM`/`TO` syntax (supported in some versions) to register multiple valid endpoint pairs under one table name:
+
+```cypher
+-- One rel table connecting persons to persons
+CREATE REL TABLE Knows(FROM Person TO Person, since DATE)
+
+-- A different table connecting persons to organisations
+CREATE REL TABLE WorksAt(FROM Person TO Organisation, since DATE, role STRING)
+```
+
+<Warning>
+You cannot create a single relationship table that enforces different property schemas for different `FROM`/`TO` combinations. Define a separate table for each distinct relationship type.
+</Warning>
+
+## Worked example
+
+The following schema creates two node tables and two relationship tables, matching the demo database shipped with Kuzu:
+
+```cypher
+CREATE NODE TABLE User(name STRING, age INT64, PRIMARY KEY (name))
+CREATE NODE TABLE City(name STRING, population INT64, PRIMARY KEY (name))
+CREATE REL TABLE Follows(FROM User TO User, since INT64)
+CREATE REL TABLE LivesIn(FROM User TO City)
+```
+
+After loading data, the graph looks like this:
+
+| Entity | Type | Properties |
+|--------|------|-----------|
+| `Adam` | `User` | `age: 30` |
+| `Karissa` | `User` | `age: 40` |
+| `Waterloo` | `City` | `population: 150000` |
+| `Adam→Karissa` | `Follows` | `since: 2020` |
+| `Karissa→Waterloo` | `LivesIn` | _(none)_ |
+
+You can query this graph with Cypher:
+
+```cypher
+MATCH (u:User)-[:LivesIn]->(c:City)
+RETURN u.name, c.name, c.population
+```
+
+## Inspecting tables
+
+Use built-in catalog functions to explore your schema at runtime:
+
+```cypher
+-- List all tables (node and relationship)
+CALL show_tables() RETURN *
+
+-- Show columns for a specific table
+CALL table_info('User') RETURN *
+
+-- Show which node tables a relationship connects
+CALL show_connection('Follows') RETURN *
+```
